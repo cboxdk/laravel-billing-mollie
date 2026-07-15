@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    name: PHP ${{ matrix.php }} · Testbench ${{ matrix.testbench }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+        testbench: ['10.*', '11.*']
+    steps:
+      - uses: actions/checkout@v4
+
+      # This adapter depends on cboxdk/laravel-billing via a local path repository
+      # (../laravel-billing). Until laravel-billing is published to Packagist, CI
+      # clones it as a sibling. Requires a CBOXDK_PAT secret with read access to the
+      # private repo. Once laravel-billing is on Packagist, drop this step and the
+      # path repository, and require a versioned release instead.
+      - name: Fetch laravel-billing (path dependency)
+        run: git clone --depth 1 "https://x-access-token:${{ secrets.CBOXDK_PAT }}@github.com/cboxdk/laravel-billing.git" ../laravel-billing
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Constrain Testbench (Laravel major)
+        run: composer require "orchestra/testbench:${{ matrix.testbench }}" --dev --no-update --no-interaction
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: QA gate (pint · phpstan · pest · license-check · audit)
+        run: composer qa
