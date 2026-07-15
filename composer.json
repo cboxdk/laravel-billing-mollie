@@ -9,7 +9,7 @@
     ],
     "require": {
         "php": "^8.4",
-        "cboxdk/laravel-billing": "@dev",
+        "cboxdk/laravel-billing": "^0.1",
         "illuminate/contracts": "^13.0",
         "illuminate/support": "^13.0",
         "mollie/mollie-api-php": "^3.13"
