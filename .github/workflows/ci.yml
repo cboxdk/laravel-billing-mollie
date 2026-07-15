@@ -20,14 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # This adapter depends on cboxdk/laravel-billing via a local path repository
-      # (../laravel-billing). Until laravel-billing is published to Packagist, CI
-      # clones it as a sibling. Requires a CBOXDK_PAT secret with read access to the
-      # private repo. Once laravel-billing is on Packagist, drop this step and the
-      # path repository, and require a versioned release instead.
-      - name: Fetch laravel-billing (path dependency)
-        run: git clone --depth 1 "https://x-access-token:${{ secrets.CBOXDK_PAT }}@github.com/cboxdk/laravel-billing.git" ../laravel-billing
-
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:

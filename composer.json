@@ -5,7 +5,7 @@
     "keywords": ["cbox", "billing", "payments", "mollie", "gateway", "laravel"],
     "license": "MIT",
     "repositories": [
-        { "type": "path", "url": "../laravel-billing", "options": { "symlink": true } }
+        { "type": "vcs", "url": "https://github.com/cboxdk/laravel-billing" }
     ],
     "require": {
         "php": "^8.4",
