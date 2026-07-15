@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:8f1dc307-a137-481a-8c84-7104b888f4a5",
+    "serialNumber": "urn:uuid:d1405168-8b72-4358-804c-cd9b8008a322",
     "version": 1,
     "metadata": {
         "tools": [
@@ -101,11 +101,11 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/cboxdk/laravel-tax@v0.1.0",
+            "bom-ref": "pkg:composer/cboxdk/laravel-tax@v0.1.1",
             "group": "cboxdk",
             "name": "laravel-tax",
-            "version": "v0.1.0",
-            "purl": "pkg:composer/cboxdk/laravel-tax@v0.1.0",
+            "version": "v0.1.1",
+            "purl": "pkg:composer/cboxdk/laravel-tax@v0.1.1",
             "description": "Cbox Tax \u2014 a self-hostable consumption-tax engine for Laravel: it owns the calculation logic (place-of-supply, reverse-charge, rate application, inclusive/exclusive) per jurisdiction and sources only rate data behind a pluggable contract.",
             "licenses": [
                 {
