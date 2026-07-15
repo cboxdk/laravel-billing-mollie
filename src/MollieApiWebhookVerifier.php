@@ -4,43 +4,84 @@ declare(strict_types=1);
 
 namespace Cbox\Billing\Mollie;
 
-use Cbox\Billing\Mollie\Contracts\WebhookVerifier;
-use Cbox\Billing\Mollie\Exceptions\WebhookVerificationFailed;
+use Cbox\Billing\Mollie\Contracts\PaymentFetcher;
+use Cbox\Billing\Payment\Contracts\WebhookVerifier;
+use Cbox\Billing\Payment\Enums\WebhookEventType;
+use Cbox\Billing\Payment\Exceptions\WebhookVerificationFailed;
+use Cbox\Billing\Payment\ValueObjects\WebhookEvent;
+use Cbox\Billing\Payment\ValueObjects\WebhookPayload;
 use Mollie\Api\Exceptions\InvalidSignatureException;
 use Mollie\Api\Webhooks\SignatureValidator;
 
 /**
- * The real webhook verifier: wraps the Mollie SDK's {@see SignatureValidator}
- * (HMAC-SHA256 over the raw body against the webhook signing secret) and extracts the
- * payment id from Mollie's form-encoded body (`id=tr_…`). No bespoke crypto —
- * verification is entirely the SDK's. Deny-by-default: an invalid signature, or a
- * body with no signature at all, is rejected. Verify against the live Mollie API
- * before relying on it in production.
+ * The Mollie-backed {@see WebhookVerifier}: wraps the Mollie SDK's
+ * {@see SignatureValidator} (HMAC-SHA256 over the raw body against the webhook signing
+ * secret) and normalises the delivery onto the engine's gateway-agnostic
+ * {@see WebhookEvent}. No bespoke crypto — verification is entirely the SDK's.
+ *
+ * A Mollie classic webhook body carries only the payment id (`id=tr_…`), never the
+ * status or amount, so after proving the signature the verifier fetches the payment's
+ * authoritative state through the {@see PaymentFetcher} seam to build the event. Mollie
+ * has no native event id either, so the first-sight dedup key is the payment id plus its
+ * current status (a genuine `open`→`paid` transition is a distinct event).
+ *
+ * Deny-by-default: a missing signature, an invalid signature, or a body without a
+ * payment id throws {@see WebhookVerificationFailed} and never becomes an event. Verify
+ * against the live Mollie API before relying on it in production.
  */
 readonly class MollieApiWebhookVerifier implements WebhookVerifier
 {
-    public function __construct(private SignatureValidator $validator) {}
+    public function __construct(
+        private SignatureValidator $validator,
+        private PaymentFetcher $fetcher,
+    ) {}
 
-    public function verify(string $payload, string $signature): string
+    public function verify(WebhookPayload $payload): WebhookEvent
     {
+        $signature = $payload->header('X-Mollie-Signature');
+
+        if ($signature === null || $signature === '') {
+            throw WebhookVerificationFailed::unsigned();
+        }
+
         try {
-            $valid = $this->validator->validatePayload($payload, $signature);
+            $valid = $this->validator->validatePayload($payload->body, $signature);
         } catch (InvalidSignatureException $e) {
             throw new WebhookVerificationFailed($e->getMessage(), previous: $e);
         }
 
-        // validatePayload returns false for a legacy, unsigned delivery. We require a
-        // signature, so an unsigned payload is refused rather than trusted.
         if (! $valid) {
-            throw new WebhookVerificationFailed('Missing Mollie webhook signature.');
+            throw WebhookVerificationFailed::unsigned();
         }
 
-        return $this->paymentId($payload);
+        $payment = $this->fetcher->fetch($this->paymentId($payload->body));
+
+        return new WebhookEvent(
+            id: $payment['id'].':'.$payment['status'],
+            type: self::mapType($payment['status']),
+            reference: $payment['reference'],
+            amount: $payment['amount'],
+        );
     }
 
-    private function paymentId(string $payload): string
+    /**
+     * Map a Mollie payment status onto the engine's narrow event type. Only `paid`
+     * carries the paid effect; a terminal `expired`/`canceled`/`failed` maps to a
+     * failure notice; every other status (`open`, `pending`, `authorized`, …) maps to a
+     * pending notice — recorded and deduped by the ingest, but moving no money.
+     */
+    private static function mapType(string $status): WebhookEventType
     {
-        parse_str($payload, $params);
+        return match ($status) {
+            'paid' => WebhookEventType::PaymentSettled,
+            'expired', 'canceled', 'failed' => WebhookEventType::PaymentFailed,
+            default => WebhookEventType::PaymentPending,
+        };
+    }
+
+    private function paymentId(string $body): string
+    {
+        parse_str($body, $params);
         $id = $params['id'] ?? null;
 
         if (! is_string($id) || $id === '') {

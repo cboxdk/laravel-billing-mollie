@@ -5,23 +5,27 @@ declare(strict_types=1);
 namespace Cbox\Billing\Mollie;
 
 use Cbox\Billing\Mollie\Contracts\MollieIntentCreator;
-use Cbox\Billing\Mollie\Contracts\SettledPaymentStore;
 use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
 use Cbox\Billing\Payment\Contracts\PaymentGateway;
+use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
 use Cbox\Billing\Payment\ValueObjects\PaymentResult;
+use Cbox\Billing\Payment\ValueObjects\RefundIntent;
 
 /**
  * A {@see PaymentGateway} backed by Mollie. Creates a Mollie payment for the amount
- * (formatted as a decimal string via the money value object) and maps Mollie's
- * status to a PaymentResult. An API failure becomes a failed result — never throws.
+ * (formatted as a decimal string via the money value object) and maps Mollie's status
+ * to a PaymentResult; also refunds a captured amount. An API failure becomes a failed
+ * result — never throws.
  *
- * Two idempotency properties live here:
+ * Idempotency properties that live here:
  *
  *  - The payment is created with a scoped external idempotency key
  *    (`reference:amount:currency`), so a crash-and-retry between the API call and
- *    recording the result cannot create a duplicate payment.
- *  - On a settled result the reference is recorded in the {@see SettledPaymentStore},
+ *    recording the result cannot create a duplicate payment. A refund is scoped by the
+ *    intent's own idempotency key so a retry cannot refund twice.
+ *  - On a settled charge the reference is claimed in the shared
+ *    {@see SettledPaymentStore} — the same settle-once guard the webhook ingest reads,
  *    so a later webhook re-confirming the same payment is a no-op (the backstop).
  *
  * Mollie is redirect-based, so the common create result is `open` (pending); the
@@ -58,10 +62,28 @@ readonly class MolliePaymentGateway implements PaymentGateway
         $mapped = $this->mapper->map($result['status'], $result['id']);
 
         if ($mapped->isSettled()) {
-            $this->settledPayments->markSettled($intent->reference);
+            $this->settledPayments->settle($intent->reference);
         }
 
         return $mapped;
+    }
+
+    public function refund(RefundIntent $intent): PaymentResult
+    {
+        $amount = (string) $intent->amount->toBrick()->getAmount();
+
+        try {
+            $result = $this->creator->refund(
+                $amount,
+                $intent->amount->currency(),
+                $intent->originalGatewayReference ?? '',
+                $intent->idempotencyKey,
+            );
+        } catch (MollieChargeFailed $e) {
+            return PaymentResult::failed($e->getMessage());
+        }
+
+        return $this->mapper->mapRefund($result['status'], $result['id']);
     }
 
     /**

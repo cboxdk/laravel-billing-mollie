@@ -2,84 +2,132 @@
 
 declare(strict_types=1);
 
-use Cbox\Billing\Mollie\Exceptions\WebhookVerificationFailed;
 use Cbox\Billing\Mollie\MollieWebhookHandler;
-use Cbox\Billing\Mollie\Testing\FakePaymentFetcher;
-use Cbox\Billing\Mollie\Testing\FakeProcessedEventStore;
-use Cbox\Billing\Mollie\Testing\FakeSettledPaymentStore;
-use Cbox\Billing\Mollie\Testing\FakeWebhookVerifier;
-use Cbox\Billing\Payment\Enums\PaymentStatus;
+use Cbox\Billing\Money\Money;
+use Cbox\Billing\Payment\Enums\WebhookEventType;
+use Cbox\Billing\Payment\Exceptions\WebhookVerificationFailed;
+use Cbox\Billing\Payment\Testing\FakeInvoicePaymentApplier;
+use Cbox\Billing\Payment\Testing\FakeProcessedEventStore;
+use Cbox\Billing\Payment\Testing\FakeSettledPaymentStore;
+use Cbox\Billing\Payment\Testing\FakeWebhookVerifier;
+use Cbox\Billing\Payment\ValueObjects\WebhookEvent;
+use Cbox\Billing\Payment\ValueObjects\WebhookPayload;
+use Cbox\Billing\Payment\Webhook\DefaultWebhookIngest;
 
-function handler(
-    string $paymentId = 'tr_1',
-    string $status = 'paid',
-    string $reference = 'DK-000001',
-    ?FakeProcessedEventStore $processed = null,
-    ?FakeSettledPaymentStore $settled = null,
-    bool $reject = false,
-): MollieWebhookHandler {
-    return new MollieWebhookHandler(
-        new FakeWebhookVerifier($paymentId, $reject),
-        new FakePaymentFetcher($status, $reference),
-        $processed ?? new FakeProcessedEventStore,
-        $settled ?? new FakeSettledPaymentStore,
-    );
+/**
+ * The adapter's handler is a thin composition over the shared seam: the shared
+ * FakeWebhookVerifier stands in for the Mollie signature check + payment fetch, and the
+ * real DefaultWebhookIngest is dogfooded over the shared in-memory fakes so the
+ * assertions read the very instances the flow wrote to.
+ */
+function ingest(
+    FakeProcessedEventStore $processed,
+    FakeSettledPaymentStore $settled,
+    FakeInvoicePaymentApplier $applier,
+): DefaultWebhookIngest {
+    return new DefaultWebhookIngest($processed, $settled, $applier);
+}
+
+function settledEvent(string $eventId = 'tr_1:paid', string $reference = 'DK-000001'): WebhookEvent
+{
+    return new WebhookEvent($eventId, WebhookEventType::PaymentSettled, $reference, Money::ofMinor(12500, 'EUR'));
+}
+
+function payload(): WebhookPayload
+{
+    return new WebhookPayload('id=tr_1', ['X-Mollie-Signature' => 'sig']);
 }
 
 it('rejects an unverified payload (deny-by-default)', function () {
-    handler(reject: true)->handle('id=tr_1', 'bad-sig');
+    $handler = new MollieWebhookHandler(
+        FakeWebhookVerifier::rejecting(),
+        ingest(new FakeProcessedEventStore, new FakeSettledPaymentStore, new FakeInvoicePaymentApplier),
+    );
+
+    $handler->handle(payload());
 })->throws(WebhookVerificationFailed::class);
 
-it('maps a verified paid payment to a settled result', function () {
-    $result = handler(paymentId: 'tr_live', status: 'paid')->handle('id=tr_live', 'sig');
+it('applies a verified settlement exactly once through the shared ingest', function () {
+    $applier = new FakeInvoicePaymentApplier;
+    $handler = new MollieWebhookHandler(
+        FakeWebhookVerifier::accepting(settledEvent()),
+        ingest(new FakeProcessedEventStore, new FakeSettledPaymentStore, $applier),
+    );
 
-    expect($result)->not->toBeNull()
-        ->and($result->isSettled())->toBeTrue()
-        ->and($result->gatewayReference)->toBe('tr_live');
+    $outcome = $handler->handle(payload());
+
+    expect($outcome->wasApplied())->toBeTrue()
+        ->and($applier->timesPaid('DK-000001'))->toBe(1)
+        ->and($applier->amountPaid('DK-000001'))->toEqual(Money::ofMinor(12500, 'EUR'));
 });
 
-it('dedups a replayed delivery of the same payment+status to a no-op', function () {
+it('collapses a replayed delivery of the same payment+status to a no-op', function () {
     $processed = new FakeProcessedEventStore;
+    $settled = new FakeSettledPaymentStore;
+    $applier = new FakeInvoicePaymentApplier;
 
-    $first = handler(processed: $processed)->handle('id=tr_1', 'sig');
-    $second = handler(processed: $processed)->handle('id=tr_1', 'sig');
+    $handler = new MollieWebhookHandler(FakeWebhookVerifier::accepting(settledEvent('tr_1:paid')), ingest($processed, $settled, $applier));
 
-    expect($first)->not->toBeNull()
-        ->and($second)->toBeNull();
-});
+    $first = $handler->handle(payload());
+    $second = $handler->handle(payload());
 
-it('processes a genuine state change (open then paid) for the same payment id', function () {
-    $processed = new FakeProcessedEventStore;
-
-    $open = handler(status: 'open', processed: $processed)->handle('id=tr_1', 'sig');
-    $paid = handler(status: 'paid', processed: $processed)->handle('id=tr_1', 'sig');
-
-    expect($open->status)->toBe(PaymentStatus::Pending)
-        ->and($paid->isSettled())->toBeTrue();
+    expect($first->wasApplied())->toBeTrue()
+        ->and($second->wasApplied())->toBeFalse()
+        ->and($applier->timesPaid('DK-000001'))->toBe(1);
 });
 
 it('settles a reference only once across different payments (per-reference idempotency)', function () {
+    $processed = new FakeProcessedEventStore;
     $settled = new FakeSettledPaymentStore;
+    $applier = new FakeInvoicePaymentApplier;
 
-    $first = handler(paymentId: 'tr_a', reference: 'DK-42', settled: $settled)->handle('id=tr_a', 'sig');
-    $second = handler(paymentId: 'tr_b', reference: 'DK-42', settled: $settled)->handle('id=tr_b', 'sig');
+    (new MollieWebhookHandler(FakeWebhookVerifier::accepting(settledEvent('tr_a:paid', 'DK-42')), ingest($processed, $settled, $applier)))->handle(payload());
+    (new MollieWebhookHandler(FakeWebhookVerifier::accepting(settledEvent('tr_b:paid', 'DK-42')), ingest($processed, $settled, $applier)))->handle(payload());
 
-    expect($first)->not->toBeNull()
-        ->and($second)->toBeNull();
+    expect($applier->timesPaid('DK-42'))->toBe(1)
+        ->and($settled->settledCount())->toBe(1);
 });
 
-it('is a no-op when the inline path already settled the reference (backstop)', function () {
+it('is a no-op when the inline charge path already settled the reference (backstop)', function () {
     $settled = new FakeSettledPaymentStore;
-    $settled->markSettled('DK-000001');
+    $settled->settle('DK-000001');
+    $applier = new FakeInvoicePaymentApplier;
 
-    expect(handler(settled: $settled)->handle('id=tr_1', 'sig'))->toBeNull();
+    $outcome = (new MollieWebhookHandler(
+        FakeWebhookVerifier::accepting(settledEvent()),
+        ingest(new FakeProcessedEventStore, $settled, $applier),
+    ))->handle(payload());
+
+    expect($outcome->wasApplied())->toBeFalse()
+        ->and($applier->isPaid('DK-000001'))->toBeFalse();
 });
 
-it('returns a non-settle result without touching the settle guard', function () {
+it('ignores a verified non-settlement event without applying an effect', function () {
+    $applier = new FakeInvoicePaymentApplier;
+    $event = new WebhookEvent('tr_1:open', WebhookEventType::PaymentPending, 'DK-000001', Money::ofMinor(12500, 'EUR'));
+
+    $outcome = (new MollieWebhookHandler(
+        FakeWebhookVerifier::accepting($event),
+        ingest(new FakeProcessedEventStore, new FakeSettledPaymentStore, $applier),
+    ))->handle(payload());
+
+    expect($outcome->wasApplied())->toBeFalse()
+        ->and($applier->isPaid('DK-000001'))->toBeFalse();
+});
+
+it('re-applies after a host crash mid-apply persisted nothing (exactly-once)', function () {
+    $processed = new FakeProcessedEventStore;
     $settled = new FakeSettledPaymentStore;
+    $applier = new FakeInvoicePaymentApplier;
+    $applier->crashOnNextApply();
 
-    $result = handler(status: 'open', settled: $settled)->handle('id=tr_1', 'sig');
+    $handler = new MollieWebhookHandler(FakeWebhookVerifier::accepting(settledEvent('tr_crash:paid')), ingest($processed, $settled, $applier));
 
-    expect($result->status)->toBe(PaymentStatus::Pending)
-        ->and($settled->isSettled('DK-000001'))->toBeFalse();
+    expect(fn () => $handler->handle(payload()))->toThrow(RuntimeException::class);
+    expect($settled->isSettled('DK-000001'))->toBeFalse();
+
+    $retry = $handler->handle(payload());
+
+    expect($retry->wasApplied())->toBeTrue()
+        ->and($applier->timesPaid('DK-000001'))->toBe(1);
 });

@@ -4,14 +4,20 @@ declare(strict_types=1);
 
 use Cbox\Billing\Mollie\MolliePaymentGateway;
 use Cbox\Billing\Mollie\Testing\FakeMollieIntentCreator;
-use Cbox\Billing\Mollie\Testing\FakeSettledPaymentStore;
 use Cbox\Billing\Money\Money;
 use Cbox\Billing\Payment\Enums\PaymentStatus;
+use Cbox\Billing\Payment\Testing\FakeSettledPaymentStore;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
+use Cbox\Billing\Payment\ValueObjects\RefundIntent;
 
 function paymentIntent(): PaymentIntent
 {
     return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001');
+}
+
+function refundIntent(): RefundIntent
+{
+    return new RefundIntent('cn_1', Money::ofMinor(12500, 'EUR'), 'CN-000001', 'cbx-refund-CN-000001', 'tr_live');
 }
 
 function gateway(FakeMollieIntentCreator $creator, ?FakeSettledPaymentStore $settled = null): MolliePaymentGateway
@@ -70,4 +76,21 @@ it('does not record settlement when the charge is not settled', function () {
     gateway(new FakeMollieIntentCreator('open'), $settled)->charge(paymentIntent());
 
     expect($settled->isSettled('DK-000001'))->toBeFalse();
+});
+
+it('maps a refunded refund to a settled result and passes the scoped idempotency key', function () {
+    $creator = new FakeMollieIntentCreator;
+
+    $result = gateway($creator)->refund(refundIntent());
+
+    expect($result->isSettled())->toBeTrue()
+        ->and($result->gatewayReference)->toBe('re_fake')
+        ->and($creator->refundIdempotencyKeys)->toBe(['cbx-refund-CN-000001']);
+});
+
+it('turns a refund API failure into a failed result without throwing', function () {
+    $result = gateway(new FakeMollieIntentCreator(fail: true))->refund(refundIntent());
+
+    expect($result->status)->toBe(PaymentStatus::Failed)
+        ->and($result->failureReason)->toBe('refund_failed');
 });

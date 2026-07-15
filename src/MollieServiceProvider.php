@@ -6,12 +6,13 @@ namespace Cbox\Billing\Mollie;
 
 use Cbox\Billing\Mollie\Contracts\MollieIntentCreator;
 use Cbox\Billing\Mollie\Contracts\PaymentFetcher;
-use Cbox\Billing\Mollie\Contracts\ProcessedEventStore;
-use Cbox\Billing\Mollie\Contracts\SettledPaymentStore;
-use Cbox\Billing\Mollie\Contracts\WebhookVerifier;
 use Cbox\Billing\Mollie\Database\DatabaseProcessedEventStore;
 use Cbox\Billing\Mollie\Database\DatabaseSettledPaymentStore;
 use Cbox\Billing\Payment\Contracts\PaymentGateway;
+use Cbox\Billing\Payment\Contracts\ProcessedEventStore;
+use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
+use Cbox\Billing\Payment\Contracts\WebhookIngest;
+use Cbox\Billing\Payment\Contracts\WebhookVerifier;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\DatabaseManager;
@@ -21,11 +22,17 @@ use Mollie\Api\Webhooks\SignatureValidator;
 
 /**
  * Binds the Mollie gateway as billing's PaymentGateway when an API key is configured,
- * and the idempotent webhook handler when both an API key (needed to fetch payment
- * status) and a webhook signing secret are configured. Without a key the provider
- * stays out of the way and billing keeps its default. The dedup/settlement stores
- * default to durable database implementations so idempotency survives across
- * processes and retries.
+ * and the Mollie-backed webhook verifier when both an API key (needed to fetch payment
+ * status) and a webhook signing secret are configured. Without a key the provider stays
+ * out of the way and billing keeps its default.
+ *
+ * The refactor onto the shared webhook seam: this adapter no longer owns a verifier
+ * contract, dedup/settle stores, or ingest logic. It overrides the engine's shared
+ * {@see ProcessedEventStore} and {@see SettledPaymentStore} with durable database
+ * implementations (so idempotency survives across processes and retries) and binds the
+ * gateway-specific {@see WebhookVerifier}, which fetches the payment through the
+ * {@see PaymentFetcher} seam; the engine's own {@see WebhookIngest} then applies the paid
+ * effect exactly once over those durable stores.
  */
 class MollieServiceProvider extends ServiceProvider
 {
@@ -93,20 +100,20 @@ class MollieServiceProvider extends ServiceProvider
             return;
         }
 
-        $this->app->singleton(WebhookVerifier::class, static fn (): MollieApiWebhookVerifier => new MollieApiWebhookVerifier(
-            new SignatureValidator($webhookSecret),
-        ));
-
-        // The handler needs to fetch payment status, which requires an API key.
+        // The verifier fetches payment status through the PaymentFetcher seam, which
+        // needs an API key; without one the webhook cannot be normalised.
         if (! is_string($key) || $key === '') {
             return;
         }
 
+        $this->app->singleton(WebhookVerifier::class, static fn (Application $app): MollieApiWebhookVerifier => new MollieApiWebhookVerifier(
+            new SignatureValidator($webhookSecret),
+            $app->make(PaymentFetcher::class),
+        ));
+
         $this->app->singleton(MollieWebhookHandler::class, static fn (Application $app): MollieWebhookHandler => new MollieWebhookHandler(
             $app->make(WebhookVerifier::class),
-            $app->make(PaymentFetcher::class),
-            $app->make(ProcessedEventStore::class),
-            $app->make(SettledPaymentStore::class),
+            $app->make(WebhookIngest::class),
         ));
     }
 

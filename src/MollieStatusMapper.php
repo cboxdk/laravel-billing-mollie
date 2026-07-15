@@ -23,4 +23,18 @@ readonly class MollieStatusMapper
             default => PaymentResult::failed("Unexpected Mollie status: {$status}"),
         };
     }
+
+    /**
+     * Maps a Mollie refund status to a {@see PaymentResult}. Refunds carry their own
+     * status vocabulary: a `refunded` refund has settled, `queued`/`pending`/`processing`
+     * is still out of band, and `failed`/`canceled` is a failure.
+     */
+    public function mapRefund(string $status, string $gatewayReference): PaymentResult
+    {
+        return match ($status) {
+            'refunded' => PaymentResult::succeeded($gatewayReference),
+            'queued', 'pending', 'processing' => PaymentResult::pending($gatewayReference),
+            default => PaymentResult::failed("Unexpected Mollie refund status: {$status}"),
+        };
+    }
 }

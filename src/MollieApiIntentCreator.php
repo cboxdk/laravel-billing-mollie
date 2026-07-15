@@ -42,4 +42,22 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
             'status' => (string) $payment->status,
         ];
     }
+
+    public function refund(string $amount, string $currency, string $paymentId, string $idempotencyKey): array
+    {
+        try {
+            $this->client->setIdempotencyKey($idempotencyKey);
+
+            $refund = $this->client->paymentRefunds->createForId($paymentId, [
+                'amount' => ['currency' => $currency, 'value' => $amount],
+            ]);
+        } catch (Throwable $e) {
+            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+        }
+
+        return [
+            'id' => (string) $refund->id,
+            'status' => (string) $refund->status,
+        ];
+    }
 }
