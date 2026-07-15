@@ -4,9 +4,6 @@
     "description": "Cbox Billing — Mollie payment-gateway adapter: a PaymentGateway implementation backed by Mollie, for cboxdk/laravel-billing.",
     "keywords": ["cbox", "billing", "payments", "mollie", "gateway", "laravel"],
     "license": "MIT",
-    "repositories": [
-        { "type": "vcs", "url": "https://github.com/cboxdk/laravel-billing" }
-    ],
     "require": {
         "php": "^8.4",
         "cboxdk/laravel-billing": "^0.1",
