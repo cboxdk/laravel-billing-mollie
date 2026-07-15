@@ -29,6 +29,12 @@ to the Mollie gateway. Mollie is redirect-based, so a payment starts `open`
 - **Never throws.** An API failure becomes a failed `PaymentResult`; Mollie
   statuses map to `succeeded` (paid) / `pending` (open) / `requires_action`
   (authorized) / `failed`.
+- **Idempotent webhooks.** `MollieWebhookHandler` verifies the signature (via the
+  SDK — deny-by-default), fetches the payment's status, dedups on payment id + status,
+  settles each reference at most once, and no-ops when the inline path already settled
+  it. Charges carry a scoped external idempotency key so a crash-and-retry never
+  duplicates a payment. Set `MOLLIE_WEBHOOK_SECRET` to enable it. See
+  [docs/core-concepts/webhooks.md](docs/core-concepts/webhooks.md).
 
 > The SDK wrapper implements Mollie's documented API shape — verify against the live
 > Mollie API before relying on it in production.

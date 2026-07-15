@@ -22,9 +22,11 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         private string $redirectUrl,
     ) {}
 
-    public function create(string $amount, string $currency, string $reference): array
+    public function create(string $amount, string $currency, string $reference, string $idempotencyKey): array
     {
         try {
+            $this->client->setIdempotencyKey($idempotencyKey);
+
             $payment = $this->client->payments->create([
                 'amount' => ['currency' => $currency, 'value' => $amount],
                 'description' => $reference,

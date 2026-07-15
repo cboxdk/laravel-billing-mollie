@@ -19,4 +19,18 @@ return [
 
     'redirect_url' => env('MOLLIE_REDIRECT_URL', ''),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook signing secret
+    |--------------------------------------------------------------------------
+    |
+    | The webhook signing secret used to verify incoming webhook signatures. When set
+    | (together with an API key, which is needed to fetch the payment's status), the
+    | webhook verifier and handler are bound; without it the handler is unavailable
+    | and unsigned payloads are rejected by default.
+    |
+    */
+
+    'webhook_secret' => env('MOLLIE_WEBHOOK_SECRET'),
+
 ];

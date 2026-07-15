@@ -13,14 +13,19 @@ use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
  */
 class FakeMollieIntentCreator implements MollieIntentCreator
 {
+    /** @var list<string> the idempotency keys the gateway passed, in order */
+    public array $idempotencyKeys = [];
+
     public function __construct(
         private string $status = 'paid',
         private string $id = 'tr_fake',
         private bool $fail = false,
     ) {}
 
-    public function create(string $amount, string $currency, string $reference): array
+    public function create(string $amount, string $currency, string $reference, string $idempotencyKey): array
     {
+        $this->idempotencyKeys[] = $idempotencyKey;
+
         if ($this->fail) {
             throw new MollieChargeFailed('payment_refused');
         }
