@@ -163,6 +163,32 @@ readonly class MolliePaymentGateway implements PaymentGateway
     }
 
     /**
+     * Create the Mollie customer (`cst_…`) that saved mandates and off-session charges hang
+     * off, stamping the host's stable `$account` key into the customer metadata
+     * (`['account' => $account]`) so the object reconciles back from the Mollie dashboard.
+     * Returns the new customer reference; the host persists the account→`cst_…` mapping. An
+     * SDK failure surfaces as {@see MollieChargeFailed} — a customer that was never created
+     * is never returned.
+     */
+    public function createCustomer(string $account, ?string $email = null, ?string $name = null): string
+    {
+        return $this->creator->createCustomer($account, $email, $name);
+    }
+
+    /**
+     * Detach a vaulted method so future off-session renewals can no longer charge it. In
+     * Mollie a saved recurring method IS a mandate, so `$paymentMethodId` is a mandate id
+     * (`mdt_…`) and detaching it means revoking that mandate. Following the same convention
+     * as {@see paymentMethods()} / {@see attachPaymentMethod()}, `$account` is the Mollie
+     * customer reference (`cst_…`) the mandate lives under — Mollie's revoke is scoped to the
+     * customer. Idempotent: revoking an already-revoked or unknown mandate is a no-op.
+     */
+    public function detachPaymentMethod(string $account, string $paymentMethodId): void
+    {
+        $this->creator->revokeMandate($account, $paymentMethodId);
+    }
+
+    /**
      * @param  array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}  $method
      */
     private function toPaymentMethod(array $method): PaymentMethod

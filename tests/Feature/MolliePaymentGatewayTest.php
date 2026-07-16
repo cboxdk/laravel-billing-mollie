@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
 use Cbox\Billing\Mollie\MolliePaymentGateway;
 use Cbox\Billing\Mollie\Testing\FakeMollieIntentCreator;
 use Cbox\Billing\Money\Money;
@@ -144,6 +145,64 @@ it('creates an off-session setup that establishes a mandate for renewals', funct
         ->and($result->clientSecret)->toBe('https://checkout.mollie.test/setup/idem-seti-1')
         ->and($result->reference)->toBe('tr_setup')
         ->and($creator->setupIdempotencyKeys)->toBe(['idem-seti-1']);
+});
+
+it('creates a Mollie customer, returns the cst_ reference and stamps the account into metadata', function () {
+    $creator = new FakeMollieIntentCreator;
+
+    $reference = gateway($creator)->createCustomer('DK-000001', 'ada@example.test', 'Ada Lovelace');
+
+    expect($reference)->toBe('cst_test_DK-000001')
+        ->and($creator->customerMetadata['DK-000001'])->toBe([
+            'email' => 'ada@example.test',
+            'name' => 'Ada Lovelace',
+            'account' => 'DK-000001',
+        ]);
+});
+
+it('resolves the same customer reference when created again for the same account', function () {
+    $creator = new FakeMollieIntentCreator;
+    $gw = gateway($creator);
+
+    $first = $gw->createCustomer('DK-000001', 'ada@example.test', 'Ada Lovelace');
+    $second = $gw->createCustomer('DK-000001');
+
+    expect($second)->toBe($first)
+        ->and($creator->customers)->toHaveCount(1);
+});
+
+it('surfaces an SDK failure on customer creation rather than returning an uncreated customer', function () {
+    expect(fn () => gateway(new FakeMollieIntentCreator(fail: true))->createCustomer('DK-000001'))
+        ->toThrow(MollieChargeFailed::class);
+});
+
+it('detaches a payment method by revoking the mandate for the customer', function () {
+    $creator = new FakeMollieIntentCreator;
+    $gw = gateway($creator);
+
+    $gw->attachPaymentMethod('cst_1', 'mdt_a');
+    $gw->attachPaymentMethod('cst_1', 'mdt_b');
+
+    $gw->detachPaymentMethod('cst_1', 'mdt_a');
+
+    expect($creator->isMandateRevoked('cst_1', 'mdt_a'))->toBeTrue()
+        ->and(collect($gw->paymentMethods('cst_1'))->pluck('id')->all())->toBe(['mdt_b']);
+});
+
+it('is idempotent: detaching an already-revoked mandate repeats as a no-op without erroring', function () {
+    $creator = new FakeMollieIntentCreator;
+    $gw = gateway($creator);
+
+    $gw->attachPaymentMethod('cst_1', 'mdt_a');
+
+    $gw->detachPaymentMethod('cst_1', 'mdt_a');
+    $gw->detachPaymentMethod('cst_1', 'mdt_a');
+
+    expect($gw->paymentMethods('cst_1'))->toBe([])
+        ->and($creator->revokedMandates)->toBe([
+            ['customerId' => 'cst_1', 'mandateId' => 'mdt_a'],
+            ['customerId' => 'cst_1', 'mandateId' => 'mdt_a'],
+        ]);
 });
 
 it('attaches a mandate, lists it, and makes it the default', function () {

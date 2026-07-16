@@ -99,4 +99,25 @@ interface MollieIntentCreator
      * @throws MollieChargeFailed
      */
     public function setDefaultMethod(string $account, string $mandateId): void;
+
+    /**
+     * Create a Mollie customer (`cst_…`) that saved mandates and off-session charges attach
+     * to, stamping the host's stable `$account` key into the customer's metadata
+     * (`['account' => $account]`) so the object reconciles back from the Mollie dashboard.
+     * Returns the new customer id. A creation that never reached Mollie surfaces as a
+     * failure — a customer that was not created must never be returned.
+     *
+     * @throws MollieChargeFailed
+     */
+    public function createCustomer(string $account, ?string $email, ?string $name): string;
+
+    /**
+     * Revoke the mandate `$mandateId` on customer `$customerId` — a saved Mollie "payment
+     * method" for recurring billing IS a mandate, so tearing one down means revoking it.
+     * Idempotent: a mandate Mollie reports as already revoked or unknown (HTTP 410 / 404)
+     * is treated as success; any other failure surfaces.
+     *
+     * @throws MollieChargeFailed
+     */
+    public function revokeMandate(string $customerId, string $mandateId): void;
 }

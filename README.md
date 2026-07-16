@@ -29,6 +29,13 @@ to the Mollie gateway. Mollie is redirect-based, so a payment starts `open`
 - **Never throws.** An API failure becomes a failed `PaymentResult`; Mollie
   statuses map to `succeeded` (paid) / `pending` (open) / `requires_action`
   (authorized) / `failed`.
+- **Customers and mandates.** `createCustomer()` mints a Mollie customer (`cst_…`),
+  stamping the host's account key into its metadata so it reconciles from the Mollie
+  dashboard; a customer that never reached Mollie is never returned. In Mollie a saved
+  recurring "payment method" *is* a mandate, so `detachPaymentMethod($account,
+  $paymentMethodId)` treats `$paymentMethodId` as a mandate id and `$account` as the
+  owning customer reference, and **revokes** that mandate. The revoke is idempotent —
+  an already-revoked or unknown mandate (Mollie 410 / 404) is a no-op.
 - **Idempotent webhooks on the shared seam.** `MollieApiWebhookVerifier` implements
   billing's canonical `Cbox\Billing\Payment\Contracts\WebhookVerifier`: it proves the
   Mollie signature via the SDK (deny-by-default), fetches the payment's authoritative

@@ -6,6 +6,8 @@ namespace Cbox\Billing\Mollie;
 
 use Cbox\Billing\Mollie\Contracts\MollieIntentCreator;
 use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
+use Mollie\Api\Exceptions\ApiException;
+use Mollie\Api\Http\ResponseStatusCode;
 use Mollie\Api\MollieApiClient;
 use Throwable;
 
@@ -163,6 +165,39 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         // Mollie has no default-mandate endpoint: a recurring charge auto-selects the first
         // valid mandate, so there is nothing to persist here. The gateway still routes
         // through the seam uniformly, and the fake simulates a reassignable vault for tests.
+    }
+
+    public function createCustomer(string $account, ?string $email, ?string $name): string
+    {
+        try {
+            $customer = $this->client->customers->create(array_filter([
+                'name' => $name,
+                'email' => $email,
+                'metadata' => ['account' => $account],
+            ], static fn (mixed $value): bool => $value !== null));
+        } catch (Throwable $e) {
+            // A customer that was never created must not be returned — surface the failure.
+            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+        }
+
+        return (string) $customer->id;
+    }
+
+    public function revokeMandate(string $customerId, string $mandateId): void
+    {
+        try {
+            $this->client->mandates->revokeForId($customerId, $mandateId);
+        } catch (ApiException $e) {
+            // Idempotent teardown: a mandate Mollie reports as already revoked (410 Gone) or
+            // unknown (404 Not Found) is the desired end state, so a retry collapses cleanly.
+            if (in_array($e->getCode(), [ResponseStatusCode::HTTP_GONE, ResponseStatusCode::HTTP_NOT_FOUND], true)) {
+                return;
+            }
+
+            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+        } catch (Throwable $e) {
+            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+        }
     }
 
     /**

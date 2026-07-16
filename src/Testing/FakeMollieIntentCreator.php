@@ -36,6 +36,30 @@ class FakeMollieIntentCreator implements MollieIntentCreator
     /** @var array<string, list<array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}>> */
     private array $methods = [];
 
+    /**
+     * The Mollie customer minted per account key, keyed by account — mint-once, so a repeat
+     * create for the same account resolves to the same `cst_…` reference.
+     *
+     * @var array<string, string>
+     */
+    public array $customers = [];
+
+    /**
+     * The customer metadata stamped on create, keyed by account, mirroring the real seam's
+     * `['account' => …]` so a test can assert the account was recorded.
+     *
+     * @var array<string, array{email: ?string, name: ?string, account: string}>
+     */
+    public array $customerMetadata = [];
+
+    /**
+     * The (customerId, mandateId) pairs the gateway asked to revoke, in order — including
+     * repeats, so a test can assert a second revoke of the same mandate stayed a no-op.
+     *
+     * @var list<array{customerId: string, mandateId: string}>
+     */
+    public array $revokedMandates = [];
+
     public function __construct(
         private string $status = 'paid',
         private string $id = 'tr_fake',
@@ -132,5 +156,53 @@ class FakeMollieIntentCreator implements MollieIntentCreator
             },
             $this->methods[$account] ?? [],
         );
+    }
+
+    public function createCustomer(string $account, ?string $email, ?string $name): string
+    {
+        if ($this->fail) {
+            throw new MollieChargeFailed('customer_create_failed');
+        }
+
+        // Mint once per account: a repeat create resolves to the same customer reference,
+        // and the metadata is stamped from the first (and only) creation.
+        if (! isset($this->customers[$account])) {
+            $this->customers[$account] = 'cst_test_'.$account;
+            $this->customerMetadata[$account] = ['email' => $email, 'name' => $name, 'account' => $account];
+        }
+
+        return $this->customers[$account];
+    }
+
+    public function revokeMandate(string $customerId, string $mandateId): void
+    {
+        if ($this->fail) {
+            throw new MollieChargeFailed('revoke_failed');
+        }
+
+        // Record every call (repeats included) so idempotency is observable, then drop the
+        // mandate from the vault. A second revoke of the same mandate finds nothing to drop
+        // and stays a no-op — mirroring Mollie's 410/404-is-success semantics.
+        $this->revokedMandates[] = ['customerId' => $customerId, 'mandateId' => $mandateId];
+
+        $this->methods[$customerId] = array_values(array_filter(
+            $this->methods[$customerId] ?? [],
+            static fn (array $method): bool => $method['id'] !== $mandateId,
+        ));
+    }
+
+    /**
+     * Whether the mandate `$mandateId` is currently revoked for `$customerId` — i.e. no
+     * longer present in the vault after at least one revoke. A test assertion helper.
+     */
+    public function isMandateRevoked(string $customerId, string $mandateId): bool
+    {
+        foreach ($this->revokedMandates as $revoked) {
+            if ($revoked['customerId'] === $customerId && $revoked['mandateId'] === $mandateId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
