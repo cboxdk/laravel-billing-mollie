@@ -8,9 +8,15 @@ use Cbox\Billing\Mollie\Contracts\MollieIntentCreator;
 use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
 use Cbox\Billing\Payment\Contracts\PaymentGateway;
 use Cbox\Billing\Payment\Contracts\SettledPaymentStore;
+use Cbox\Billing\Payment\Enums\PaymentIntentStatus;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
+use Cbox\Billing\Payment\ValueObjects\PaymentIntentRequest;
+use Cbox\Billing\Payment\ValueObjects\PaymentIntentResult;
+use Cbox\Billing\Payment\ValueObjects\PaymentMethod;
 use Cbox\Billing\Payment\ValueObjects\PaymentResult;
 use Cbox\Billing\Payment\ValueObjects\RefundIntent;
+use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
+use Cbox\Billing\Payment\ValueObjects\SetupIntentResult;
 
 /**
  * A {@see PaymentGateway} backed by Mollie. Creates a Mollie payment for the amount
@@ -36,6 +42,7 @@ readonly class MolliePaymentGateway implements PaymentGateway
     public function __construct(
         private MollieIntentCreator $creator,
         private SettledPaymentStore $settledPayments,
+        private string $profileId = '',
         private MollieStatusMapper $mapper = new MollieStatusMapper,
     ) {}
 
@@ -84,6 +91,99 @@ readonly class MolliePaymentGateway implements PaymentGateway
         }
 
         return $this->mapper->mapRefund($result['status'], $result['id']);
+    }
+
+    /**
+     * Create an on-session Mollie payment: the frontend sends the customer to the returned
+     * hosted-checkout URL (carried as the client secret) to complete it — Strong Customer
+     * Authentication happens there. No SDK call is hand-rolled here; the seam creates the
+     * payment and the mapper normalises the status. `open` / `authorized` map to
+     * {@see PaymentIntentStatus::RequiresAction}. An SDK failure
+     * propagates as {@see MollieChargeFailed}: there is no failed intent status to return,
+     * so on-session creation surfaces the error rather than claiming a state it never reached.
+     */
+    public function createPaymentIntent(PaymentIntentRequest $request): PaymentIntentResult
+    {
+        $result = $this->creator->createIntent(
+            (string) $request->amount->toBrick()->getAmount(),
+            $request->amount->currency(),
+            $request->account,
+            $request->reference,
+            $request->idempotencyKey,
+            $request->paymentMethodId,
+        );
+
+        return new PaymentIntentResult(
+            gateway: $this->name(),
+            publishableKey: $this->profileId(),
+            clientSecret: $result['checkoutUrl'],
+            status: $this->mapper->mapIntentStatus($result['status']),
+            reference: $request->reference,
+            amount: $request->amount,
+        );
+    }
+
+    /**
+     * Create an off-session setup: a `first`-sequence Mollie payment whose completion
+     * establishes a mandate later renewals charge. The Mollie payment id is echoed as the
+     * result reference for reconciliation.
+     */
+    public function createSetupIntent(SetupIntentRequest $request): SetupIntentResult
+    {
+        $result = $this->creator->createSetup($request->account, $request->idempotencyKey);
+
+        return new SetupIntentResult(
+            gateway: $this->name(),
+            publishableKey: $this->profileId(),
+            clientSecret: $result['checkoutUrl'],
+            status: $this->mapper->mapIntentStatus($result['status']),
+            reference: $result['id'],
+        );
+    }
+
+    /**
+     * @return list<PaymentMethod>
+     */
+    public function paymentMethods(string $account): array
+    {
+        return array_map(
+            $this->toPaymentMethod(...),
+            $this->creator->listMethods($account),
+        );
+    }
+
+    public function attachPaymentMethod(string $account, string $paymentMethodId): PaymentMethod
+    {
+        return $this->toPaymentMethod($this->creator->attachMethod($account, $paymentMethodId));
+    }
+
+    public function setDefaultPaymentMethod(string $account, string $paymentMethodId): void
+    {
+        $this->creator->setDefaultMethod($account, $paymentMethodId);
+    }
+
+    /**
+     * @param  array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}  $method
+     */
+    private function toPaymentMethod(array $method): PaymentMethod
+    {
+        return new PaymentMethod(
+            id: $method['id'],
+            brand: $method['brand'],
+            last4: $method['last4'],
+            expMonth: $method['expMonth'],
+            expYear: $method['expYear'],
+            isDefault: $method['isDefault'],
+        );
+    }
+
+    /**
+     * The configured Mollie profile id the frontend loads Mollie Components with, or null
+     * when none is set — the result then carries no key rather than an empty string.
+     */
+    private function profileId(): ?string
+    {
+        return $this->profileId !== '' ? $this->profileId : null;
     }
 
     /**

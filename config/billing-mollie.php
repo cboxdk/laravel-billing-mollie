@@ -21,6 +21,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Mollie profile id
+    |--------------------------------------------------------------------------
+    |
+    | The website profile id (`pfl_…`) a product's frontend loads Mollie Components
+    | with. It is returned in the PaymentIntent / SetupIntent result as the publishable
+    | key so the client can mount the card component (Strong Customer Authentication is
+    | completed on Mollie's checkout). Safe to expose to the browser; when unset the
+    | intent result carries no publishable key.
+    |
+    */
+
+    'profile_id' => env('MOLLIE_PROFILE_ID'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Off-session setup (mandate) first-payment amount
+    |--------------------------------------------------------------------------
+    |
+    | Saving a card for off-session renewals is a Mollie `first`-sequence payment that
+    | establishes a mandate. Mollie may require a non-zero amount for that first payment;
+    | set the amount (a decimal string, e.g. "0.01") and its currency here. The engine's
+    | SetupIntent request carries no amount, so it is configured at the adapter.
+    |
+    */
+
+    'setup_amount' => env('MOLLIE_SETUP_AMOUNT', '0.00'),
+
+    'setup_currency' => env('MOLLIE_SETUP_CURRENCY', 'EUR'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Webhook signing secret
     |--------------------------------------------------------------------------
     |

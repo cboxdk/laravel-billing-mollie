@@ -65,16 +65,22 @@ readonly class MollieApiWebhookVerifier implements WebhookVerifier
     }
 
     /**
-     * Map a Mollie payment status onto the engine's narrow event type. Only `paid`
-     * carries the paid effect; a terminal `expired`/`canceled`/`failed` maps to a
-     * failure notice; every other status (`open`, `pending`, `authorized`, …) maps to a
-     * pending notice — recorded and deduped by the ingest, but moving no money.
+     * Map a Mollie payment status onto the engine's narrow event type. Only `paid` carries
+     * the paid effect; a terminal `expired`/`canceled`/`failed` maps to a failure notice.
+     * The SCA states are now first-class and no longer collapsed to a generic pending
+     * notice: `open` and `authorized` mean the customer must still act / authorize on the
+     * hosted checkout ({@see WebhookEventType::RequiresAction}), and `pending` is an
+     * accepted-but-not-yet-settled charge ({@see WebhookEventType::Processing}). Neither
+     * moves money — the invoice is marked paid strictly on `paid`. Anything else authentic
+     * maps to a pending notice.
      */
     private static function mapType(string $status): WebhookEventType
     {
         return match ($status) {
             'paid' => WebhookEventType::PaymentSettled,
             'expired', 'canceled', 'failed' => WebhookEventType::PaymentFailed,
+            'open', 'authorized' => WebhookEventType::RequiresAction,
+            'pending' => WebhookEventType::Processing,
             default => WebhookEventType::PaymentPending,
         };
     }

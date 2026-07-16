@@ -5,10 +5,13 @@ declare(strict_types=1);
 use Cbox\Billing\Mollie\MolliePaymentGateway;
 use Cbox\Billing\Mollie\Testing\FakeMollieIntentCreator;
 use Cbox\Billing\Money\Money;
+use Cbox\Billing\Payment\Enums\PaymentIntentStatus;
 use Cbox\Billing\Payment\Enums\PaymentStatus;
 use Cbox\Billing\Payment\Testing\FakeSettledPaymentStore;
 use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
+use Cbox\Billing\Payment\ValueObjects\PaymentIntentRequest;
 use Cbox\Billing\Payment\ValueObjects\RefundIntent;
+use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
 
 function paymentIntent(): PaymentIntent
 {
@@ -20,9 +23,9 @@ function refundIntent(): RefundIntent
     return new RefundIntent('cn_1', Money::ofMinor(12500, 'EUR'), 'CN-000001', 'cbx-refund-CN-000001', 'tr_live');
 }
 
-function gateway(FakeMollieIntentCreator $creator, ?FakeSettledPaymentStore $settled = null): MolliePaymentGateway
+function gateway(FakeMollieIntentCreator $creator, ?FakeSettledPaymentStore $settled = null, string $profileId = 'pfl_test123'): MolliePaymentGateway
 {
-    return new MolliePaymentGateway($creator, $settled ?? new FakeSettledPaymentStore);
+    return new MolliePaymentGateway($creator, $settled ?? new FakeSettledPaymentStore, $profileId);
 }
 
 it('is named mollie', function () {
@@ -93,4 +96,75 @@ it('turns a refund API failure into a failed result without throwing', function 
 
     expect($result->status)->toBe(PaymentStatus::Failed)
         ->and($result->failureReason)->toBe('refund_failed');
+});
+
+it('creates an on-session payment intent shaped for the frontend (open maps to RequiresAction)', function () {
+    $creator = new FakeMollieIntentCreator;
+    $request = new PaymentIntentRequest('cst_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-1');
+
+    $result = gateway($creator)->createPaymentIntent($request);
+
+    expect($result->gateway)->toBe('mollie')
+        ->and($result->publishableKey)->toBe('pfl_test123')
+        ->and($result->clientSecret)->toBe('https://checkout.mollie.test/idem-pi-1')
+        ->and($result->status)->toBe(PaymentIntentStatus::RequiresAction)
+        ->and($result->requiresCustomerAction())->toBeTrue()
+        ->and($result->reference)->toBe('DK-000001')
+        ->and($result->amount)->toEqual(Money::ofMinor(12500, 'EUR'))
+        ->and($creator->intentIdempotencyKeys)->toBe(['idem-pi-1'])
+        ->and($creator->intentMandateIds)->toBe([null]);
+});
+
+it('charges a saved mandate off-session when a payment method is given (paid maps to Succeeded)', function () {
+    $creator = new FakeMollieIntentCreator(intentStatus: 'paid');
+    $request = new PaymentIntentRequest('cst_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-2', 'mdt_saved');
+
+    $result = gateway($creator)->createPaymentIntent($request);
+
+    expect($result->status)->toBe(PaymentIntentStatus::Succeeded)
+        ->and($creator->intentMandateIds)->toBe(['mdt_saved']);
+});
+
+it('omits the publishable key when no profile id is configured', function () {
+    $request = new PaymentIntentRequest('cst_1', 'DK-000001', Money::ofMinor(12500, 'EUR'), 'idem-pi-3');
+
+    $result = gateway(new FakeMollieIntentCreator, profileId: '')->createPaymentIntent($request);
+
+    expect($result->publishableKey)->toBeNull();
+});
+
+it('creates an off-session setup that establishes a mandate for renewals', function () {
+    $creator = new FakeMollieIntentCreator;
+    $request = new SetupIntentRequest('cst_1', 'idem-seti-1');
+
+    $result = gateway($creator)->createSetupIntent($request);
+
+    expect($result->gateway)->toBe('mollie')
+        ->and($result->publishableKey)->toBe('pfl_test123')
+        ->and($result->clientSecret)->toBe('https://checkout.mollie.test/setup/idem-seti-1')
+        ->and($result->reference)->toBe('tr_setup')
+        ->and($creator->setupIdempotencyKeys)->toBe(['idem-seti-1']);
+});
+
+it('attaches a mandate, lists it, and makes it the default', function () {
+    $gw = gateway(new FakeMollieIntentCreator);
+
+    expect($gw->paymentMethods('cst_1'))->toBe([]);
+
+    $first = $gw->attachPaymentMethod('cst_1', 'mdt_a');
+    $second = $gw->attachPaymentMethod('cst_1', 'mdt_b');
+
+    expect($first->id)->toBe('mdt_a')
+        ->and($first->brand)->toBe('Visa')
+        ->and($first->last4)->toBe('4242')
+        ->and($first->isDefault)->toBeTrue()
+        ->and($second->isDefault)->toBeFalse()
+        ->and($gw->paymentMethods('cst_1'))->toHaveCount(2);
+
+    $gw->setDefaultPaymentMethod('cst_1', 'mdt_b');
+
+    $byId = collect($gw->paymentMethods('cst_1'))->keyBy->id;
+
+    expect($byId['mdt_a']->isDefault)->toBeFalse()
+        ->and($byId['mdt_b']->isDefault)->toBeTrue();
 });

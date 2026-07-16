@@ -69,6 +69,15 @@ class MollieServiceProvider extends ServiceProvider
         $redirectUrl = $config->get('billing-mollie.redirect_url');
         $redirectUrl = is_string($redirectUrl) ? $redirectUrl : '';
 
+        $setupAmount = $config->get('billing-mollie.setup_amount');
+        $setupAmount = is_string($setupAmount) ? $setupAmount : '0.00';
+
+        $setupCurrency = $config->get('billing-mollie.setup_currency');
+        $setupCurrency = is_string($setupCurrency) ? $setupCurrency : 'EUR';
+
+        $profileId = $config->get('billing-mollie.profile_id');
+        $profileId = is_string($profileId) ? $profileId : '';
+
         $this->app->singleton(MollieApiClient::class, static function () use ($key): MollieApiClient {
             $client = new MollieApiClient;
             $client->setApiKey($key);
@@ -79,6 +88,8 @@ class MollieServiceProvider extends ServiceProvider
         $this->app->singleton(MollieIntentCreator::class, static fn (Application $app): MollieApiIntentCreator => new MollieApiIntentCreator(
             $app->make(MollieApiClient::class),
             $redirectUrl,
+            $setupAmount,
+            $setupCurrency,
         ));
 
         $this->app->singleton(PaymentFetcher::class, static fn (Application $app): MollieApiPaymentFetcher => new MollieApiPaymentFetcher(
@@ -88,6 +99,7 @@ class MollieServiceProvider extends ServiceProvider
         $this->app->singleton(PaymentGateway::class, static fn (Application $app): MolliePaymentGateway => new MolliePaymentGateway(
             $app->make(MollieIntentCreator::class),
             $app->make(SettledPaymentStore::class),
+            $profileId,
         ));
     }
 

@@ -50,8 +50,24 @@ it('keys the dedup id on payment id plus status so an open→paid transition is 
     $paid = verifier('paid')->verify(signedBody('tr_x'));
 
     expect($open->id)->toBe('tr_x:open')
-        ->and($open->type)->toBe(WebhookEventType::PaymentPending)
         ->and($paid->id)->toBe('tr_x:paid');
+});
+
+it('maps open and authorized to the SCA RequiresAction type (no effect)', function () {
+    $open = verifier('open')->verify(signedBody('tr_a'));
+    $authorized = verifier('authorized')->verify(signedBody('tr_b'));
+
+    expect($open->type)->toBe(WebhookEventType::RequiresAction)
+        ->and($open->type->requiresCustomerAction())->toBeTrue()
+        ->and($open->isSettlement())->toBeFalse()
+        ->and($authorized->type)->toBe(WebhookEventType::RequiresAction);
+});
+
+it('maps a pending status to the Processing type (no effect)', function () {
+    $event = verifier('pending')->verify(signedBody('tr_p'));
+
+    expect($event->type)->toBe(WebhookEventType::Processing)
+        ->and($event->isSettlement())->toBeFalse();
 });
 
 it('maps a terminal status to a non-settling failure notice', function () {
