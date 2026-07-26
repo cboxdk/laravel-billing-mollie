@@ -1,7 +1,7 @@
 {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
-    "serialNumber": "urn:uuid:509258e6-0dbf-4dac-8347-4dba5063df58",
+    "serialNumber": "urn:uuid:66dac994-7b98-4d93-82e2-b53e1cb38901",
     "version": 1,
     "metadata": {
         "tools": [
@@ -69,11 +69,11 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/cboxdk/laravel-billing@v0.8.0",
+            "bom-ref": "pkg:composer/cboxdk/laravel-billing@v0.9.0",
             "group": "cboxdk",
             "name": "laravel-billing",
-            "version": "v0.8.0",
-            "purl": "pkg:composer/cboxdk/laravel-billing@v0.8.0",
+            "version": "v0.9.0",
+            "purl": "pkg:composer/cboxdk/laravel-billing@v0.9.0",
             "description": "Cbox Billing \u2014 the billing engine for Laravel \u2014 a gateway-agnostic library: catalog, subscriptions, real-time usage metering with hard limits, a double-entry ledger, invoicing, and pricing operations.",
             "licenses": [
                 {
@@ -325,11 +325,11 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/guzzlehttp/guzzle@7.14.2",
+            "bom-ref": "pkg:composer/guzzlehttp/guzzle@7.15.1",
             "group": "guzzlehttp",
             "name": "guzzle",
-            "version": "7.14.2",
-            "purl": "pkg:composer/guzzlehttp/guzzle@7.14.2",
+            "version": "7.15.1",
+            "purl": "pkg:composer/guzzlehttp/guzzle@7.15.1",
             "description": "Guzzle is a PHP HTTP client library",
             "licenses": [
                 {
@@ -357,11 +357,11 @@
         },
         {
             "type": "library",
-            "bom-ref": "pkg:composer/guzzlehttp/psr7@2.12.5",
+            "bom-ref": "pkg:composer/guzzlehttp/psr7@2.13.0",
             "group": "guzzlehttp",
             "name": "psr7",
-            "version": "2.12.5",
-            "purl": "pkg:composer/guzzlehttp/psr7@2.12.5",
+            "version": "2.13.0",
+            "purl": "pkg:composer/guzzlehttp/psr7@2.13.0",
             "description": "PSR-7 message implementation that also provides common utility methods",
             "licenses": [
                 {
