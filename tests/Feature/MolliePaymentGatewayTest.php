@@ -14,9 +14,14 @@ use Cbox\Billing\Payment\ValueObjects\PaymentIntentRequest;
 use Cbox\Billing\Payment\ValueObjects\RefundIntent;
 use Cbox\Billing\Payment\ValueObjects\SetupIntentRequest;
 
+/**
+ * An OFF-SESSION renewal intent: it names the Mollie customer and the confirmed mandate,
+ * which is what `sequenceType: recurring` needs. An intent without them cannot be collected —
+ * see the refusal test at the bottom of this file.
+ */
 function paymentIntent(): PaymentIntent
 {
-    return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001');
+    return new PaymentIntent('pi_1', Money::ofMinor(12500, 'EUR'), 'DK-000001', 'cst_live', 'mdt_live');
 }
 
 function refundIntent(): RefundIntent
@@ -226,4 +231,26 @@ it('attaches a mandate, lists it, and makes it the default', function () {
 
     expect($byId['mdt_a']->isDefault)->toBeFalse()
         ->and($byId['mdt_b']->isDefault)->toBeTrue();
+});
+
+it('charges the saved mandate the intent names', function () {
+    $creator = new FakeMollieIntentCreator('paid');
+
+    gateway($creator)->charge(paymentIntent());
+
+    // The recurring path already existed on the creator; `charge()` simply called the
+    // on-session one, which opens a payment awaiting a checkout redirect nobody will follow.
+    expect($creator->intentMandateIds)->toBe(['mdt_live']);
+});
+
+it('fails an off-session charge that has no mandate instead of opening an unpayable payment', function () {
+    $creator = new FakeMollieIntentCreator('paid');
+
+    $result = gateway($creator)->charge(
+        new PaymentIntent('pi_2', Money::ofMinor(12500, 'EUR'), 'DK-000002'),
+    );
+
+    expect($result->status)->toBe(PaymentStatus::Failed)
+        ->and($result->failureReason)->toContain('saved mandate')
+        ->and($creator->intentMandateIds)->toBe([]);
 });

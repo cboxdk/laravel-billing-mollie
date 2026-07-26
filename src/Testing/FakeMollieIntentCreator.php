@@ -93,11 +93,29 @@ class FakeMollieIntentCreator implements MollieIntentCreator
 
     public function createIntent(string $amount, string $currency, string $account, string $reference, string $idempotencyKey, ?string $mandateId): array
     {
+        $recurring = $mandateId !== null && $mandateId !== '';
+
         $this->intentIdempotencyKeys[] = $idempotencyKey;
         $this->intentMandateIds[] = $mandateId;
 
+        // A recurring call is the off-session CHARGE, so it also lands in the charge ledger the
+        // charge-path assertions read. Recording it only as an "intent" would silently blind
+        // every existing test that checks the charge's scoped idempotency key.
+        if ($recurring) {
+            $this->idempotencyKeys[] = $idempotencyKey;
+        }
+
         if ($this->fail) {
-            throw new MollieChargeFailed('intent_failed');
+            throw new MollieChargeFailed($recurring ? 'payment_refused' : 'intent_failed');
+        }
+
+        // A call carrying a mandate IS the off-session charge (`sequenceType: recurring`), so it
+        // reports the CHARGE outcome this fake was constructed with. Without a mandate it is an
+        // on-session intent the customer still has to confirm at a checkout URL, which has its
+        // own pending status. Collapsing the two would let a renewal test pass on an `open`
+        // payment nobody ever pays.
+        if ($mandateId !== null && $mandateId !== '') {
+            return ['id' => $this->id, 'status' => $this->status, 'checkoutUrl' => null];
         }
 
         return ['id' => 'tr_intent', 'status' => $this->intentStatus, 'checkoutUrl' => 'https://checkout.mollie.test/'.$idempotencyKey];

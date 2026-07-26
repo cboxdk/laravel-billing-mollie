@@ -55,12 +55,28 @@ readonly class MolliePaymentGateway implements PaymentGateway
     {
         $amount = (string) $intent->amount->toBrick()->getAmount();
 
+        // Refuse rather than attempt a charge that cannot collect. `create()` opens a payment
+        // with no customer and no mandate, so Mollie returns an `open` payment awaiting a
+        // checkout redirect — which for a renewal means nobody ever pays it, while the status
+        // reads as pending rather than failed and dunning never opens. A FAILED result is the
+        // recoverable outcome: it asks the customer for a mandate.
+        if (! $intent->isOffSession()) {
+            return PaymentResult::failed(
+                'No saved mandate for this account: an off-session charge needs both a Mollie customer and a confirmed mandate. Ask the customer to add a payment method in the billing portal.',
+            );
+        }
+
         try {
-            $result = $this->creator->create(
+            // `createIntent` with a mandate is the recurring path: `sequenceType: recurring`
+            // plus the mandate id, no redirect. It already existed — `charge()` simply called
+            // the on-session creator instead.
+            $result = $this->creator->createIntent(
                 $amount,
                 $intent->amount->currency(),
+                (string) $intent->customerRef,
                 $intent->reference,
                 $this->idempotencyKey($intent),
+                (string) $intent->paymentMethodRef,
             );
         } catch (MollieChargeFailed $e) {
             return PaymentResult::failed($e->getMessage());
