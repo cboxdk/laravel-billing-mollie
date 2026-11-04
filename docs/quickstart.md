@@ -14,6 +14,7 @@ composer require cboxdk/laravel-billing-mollie
 // .env
 MOLLIE_KEY=live_...
 MOLLIE_REDIRECT_URL=https://your-app.test/billing/return
+MOLLIE_WEBHOOK_URL=https://your-app.test/webhooks/mollie
 ```
 
 With a key set, `Cbox\Billing\Payment\Contracts\PaymentGateway` resolves to the

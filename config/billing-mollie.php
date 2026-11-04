@@ -52,13 +52,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Webhook signing secret
+    | Webhook URL
     |--------------------------------------------------------------------------
     |
-    | The webhook signing secret used to verify incoming webhook signatures. When set
-    | (together with an API key, which is needed to fetch the payment's status), the
-    | webhook verifier and handler are bound; without it the handler is unavailable
-    | and unsigned payloads are rejected by default.
+    | Where Mollie reports a payment's changes (paid, failed, refunded, charged
+    | back). It is sent as the `webhookUrl` of every payment the adapter creates;
+    | Mollie has no account-wide webhook for classic payments, so without it Mollie
+    | never calls back. It must be reachable from the internet.
+    |
+    */
+
+    'webhook_url' => env('MOLLIE_WEBHOOK_URL', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook signing secret (optional)
+    |--------------------------------------------------------------------------
+    |
+    | Mollie's classic payment webhooks are not signed: the body is only the
+    | payment id, and the verifier proves it by fetching the payment with the API
+    | key. Next-gen webhook subscriptions are signed (`X-Mollie-Signature`); set
+    | their signing secret here and a signed delivery must carry a valid signature.
+    | Without it, a signed delivery is refused and classic deliveries still verify.
     |
     */
 

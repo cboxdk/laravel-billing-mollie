@@ -51,8 +51,10 @@ interface MollieIntentCreator
      * `$mandateId` is set the payment is charged `recurring` against that saved mandate
      * (no redirect); otherwise the customer completes it on the checkout. Scoped by
      * `$idempotencyKey` so a retried creation collapses to a single Mollie payment.
+     * `failureReason` is Mollie's reason when the payment failed at once (a card's
+     * `details.failureReason`, a direct debit's `details.bankReasonCode`), else null.
      *
-     * @return array{id: string, status: string, checkoutUrl: ?string}
+     * @return array{id: string, status: string, checkoutUrl: ?string, failureReason?: ?string}
      *
      * @throws MollieChargeFailed
      */
@@ -70,8 +72,9 @@ interface MollieIntentCreator
     public function createSetup(string $account, string $idempotencyKey): array;
 
     /**
-     * The card mandates saved for `$account`, mapped to the seam's display shape, with the
-     * mandate Mollie would charge (the first `valid` one) flagged as default.
+     * The mandates saved for `$account` (cards and SEPA Direct Debit, brand `sepa_debit`),
+     * mapped to the seam's display shape, with the mandate Mollie would charge (the first
+     * `valid` one) flagged as default. An `invalid` mandate is left out: it cannot be charged.
      *
      * @return list<array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}>
      *

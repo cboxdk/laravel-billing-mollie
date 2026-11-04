@@ -56,6 +56,14 @@ expect($outcome->wasApplied())->toBeTrue()
     ->and($applier->timesPaid($event->reference))->toBe(1);
 ```
 
-The Mollie-specific `MollieApiWebhookVerifier` (signature check, payment-id extraction,
-status → `WebhookEvent` normalisation) is proven against a genuinely-signed body through
-the real Mollie SDK — see `tests/Feature/MollieApiWebhookVerifierTest.php`.
+The Mollie-specific `MollieApiWebhookVerifier` (classic deliveries proved by the payment
+fetch, signed next-gen deliveries checked by the real SDK validator, payment-id extraction,
+status → `WebhookEvent` normalisation) is proven in
+`tests/Feature/MollieApiWebhookVerifierTest.php`. `FakePaymentFetcher` scripts the fetched
+payment, including a refund, chargebacks, a failure reason, or a payment the account does
+not have.
+
+The real SDK seams are driven end to end in `tests/Feature/MollieApiShapesTest.php`: a real
+`MollieApiClient` over a Guzzle mock handler answers with Mollie's own documented example
+responses (`tests/Fixtures/api`, copied from the API reference), and the test asserts both
+the request sent (webhook URL, sequence type, mandate, idempotency key) and what is read back.

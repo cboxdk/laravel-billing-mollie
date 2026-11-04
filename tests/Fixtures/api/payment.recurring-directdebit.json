@@ -1,0 +1,64 @@
+{
+  "resource": "payment",
+  "id": "tr_DjH8FpPNj7",
+  "mode": "test",
+  "createdAt": "2022-01-04T12:44:39+00:00",
+  "amount": {
+    "value": "20.00",
+    "currency": "EUR"
+  },
+  "description": "Direct debit charge as recuring payment",
+  "method": "directdebit",
+  "metadata": {
+    "someProperty": "someValue",
+    "anotherProperty": "anotherValue"
+  },
+  "status": "pending",
+  "isCancelable": true,
+  "locale": "en_US",
+  "profileId": "pfl_85dxyKqNHa",
+  "customerId": "cst_tKt44u85MM",
+  "mandateId": "mdt_uDPFVsxjR4",
+  "sequenceType": "recurring",
+  "redirectUrl": null,
+  "webhookUrl": "https://example.com/webhook",
+  "settlementAmount": {
+    "value": "20.00",
+    "currency": "EUR"
+  },
+  "details": {
+    "transferReference": "SD49-7608-3386-2993",
+    "creditorIdentifier": "NL08ZZZ502057730000",
+    "consumerName": "Jane Doe",
+    "consumerAccount": "NL55INGB0000000000",
+    "consumerBic": "INGBNL2A",
+    "dueDate": "2022-01-05",
+    "signatureDate": "2022-01-04"
+  },
+  "_links": {
+    "self": {
+      "href": "...",
+      "type": "application/hal+json"
+    },
+    "dashboard": {
+      "href": "https://www.mollie.com/dashboard/org_13514547/payments/tr_DjH8FpPNj7",
+      "type": "text/html"
+    },
+    "changePaymentState": {
+      "href": "https://www.mollie.com/checkout/test-mode?method=directdebit&token=3.88ss2m",
+      "type": "text/html"
+    },
+    "customer": {
+      "href": "https://api.mollie.com/v2/customers/cst_tKt44u85MM",
+      "type": "application/hal+json"
+    },
+    "mandate": {
+      "href": "https://api.mollie.com/v2/customers/cst_tKt44u85MM/mandates/mdt_uDPFVsxjR4",
+      "type": "application/hal+json"
+    },
+    "documentation": {
+      "href": "...",
+      "type": "text/html"
+    }
+  }
+}

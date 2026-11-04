@@ -15,12 +15,18 @@ use Cbox\Billing\Payment\ValueObjects\PaymentResult;
  */
 readonly class MollieStatusMapper
 {
-    public function map(string $status, string $gatewayReference): PaymentResult
+    /**
+     * A failed, canceled or expired payment fails with Mollie's own reason when it gave one (a
+     * card's `failureReason` such as `insufficient_funds`, a direct debit's bank reason code such
+     * as `AM04`), else `payment_<status>`, and keeps the payment id for reconciliation.
+     */
+    public function map(string $status, string $gatewayReference, ?string $failureReason = null): PaymentResult
     {
         return match ($status) {
             'paid' => PaymentResult::succeeded($gatewayReference),
             'open', 'pending' => PaymentResult::pending($gatewayReference),
             'authorized' => new PaymentResult(PaymentStatus::RequiresAction, $gatewayReference),
+            'failed', 'canceled', 'expired' => new PaymentResult(PaymentStatus::Failed, $gatewayReference, $failureReason ?? "payment_{$status}"),
             default => PaymentResult::failed("Unexpected Mollie status: {$status}"),
         };
     }

@@ -1,0 +1,63 @@
+{
+  "resource": "payment",
+  "id": "tr_EdTCRdcfCs",
+  "mode": "live",
+  "createdAt": "2022-01-18T15:16:07+00:00",
+  "amount": {
+    "value": "0.01",
+    "currency": "EUR"
+  },
+  "description": "Mollie  #136",
+  "method": "creditcard",
+  "metadata": {
+    "order_id": "136",
+    "customer_id": null,
+    "billing_address": {
+      "first_name": "Amanda",
+      "email": "test@mollie.com",
+      "last_name": "Walsh",
+      "city": "Paris",
+      "state": "Centre",
+      "country": "FR",
+      "country_code": "FR",
+      "zip": "75007",
+      "phone": 628351095,
+      "address1": "Champ de Mars, 5 Avenue Anatole France",
+      "address2": null,
+      "name": "Amanda Walsh",
+      "state_code": null,
+      "phone_number": 628351095
+    },
+    "default_instrument": false
+  },
+  "status": "failed",
+  "failedAt": "2022-01-18T15:16:30+00:00",
+  "locale": "nl_NL",
+  "countryCode": "NL",
+  "profileId": "pfl_zcfJRjkf6P",
+  "sequenceType": "oneoff",
+  "redirectUrl": "https://example.com/pay/external/store/1001879680/order/136/provider/mollie/return",
+  "webhookUrl": "https://example.com/api/public/v1/payments/stores/1001879680/providers/mollie/notifications?currency_code=EUR",
+  "details": {
+    "cardToken": "tkn_t67GnF6USB",
+    "cardFingerprint": "3uzqSxyue3dDWJMHdPkBvfy6",
+    "cardNumber": "9996",
+    "cardHolder": "Mollie",
+    "cardAudience": "consumer",
+    "cardLabel": "Visa",
+    "cardCountryCode": "MU",
+    "cardSecurity": "3dsecure",
+    "failureReason": "authentication_failed",
+    "failureMessage": "3-D Secure authenticatie is gefaald."
+  },
+  "_links": {
+    "self": {
+      "href": "...",
+      "type": "application/hal+json"
+    },
+    "dashboard": {
+      "href": "https://www.mollie.com/dashboard/org_7049691/payments/tr_EdTCRdcfCs",
+      "type": "text/html"
+    }
+  }
+}

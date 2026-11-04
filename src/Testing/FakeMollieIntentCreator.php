@@ -67,6 +67,7 @@ class FakeMollieIntentCreator implements MollieIntentCreator
         private string $refundStatus = 'refunded',
         private string $refundId = 're_fake',
         private string $intentStatus = 'open',
+        private ?string $failureReason = null,
     ) {}
 
     public function create(string $amount, string $currency, string $reference, string $idempotencyKey): array
@@ -115,10 +116,10 @@ class FakeMollieIntentCreator implements MollieIntentCreator
         // own pending status. Collapsing the two would let a renewal test pass on an `open`
         // payment nobody ever pays.
         if ($mandateId !== null && $mandateId !== '') {
-            return ['id' => $this->id, 'status' => $this->status, 'checkoutUrl' => null];
+            return ['id' => $this->id, 'status' => $this->status, 'checkoutUrl' => null, 'failureReason' => $this->failureReason];
         }
 
-        return ['id' => 'tr_intent', 'status' => $this->intentStatus, 'checkoutUrl' => 'https://checkout.mollie.test/'.$idempotencyKey];
+        return ['id' => 'tr_intent', 'status' => $this->intentStatus, 'checkoutUrl' => 'https://checkout.mollie.test/'.$idempotencyKey, 'failureReason' => null];
     }
 
     public function createSetup(string $account, string $idempotencyKey): array

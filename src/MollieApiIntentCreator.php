@@ -6,6 +6,8 @@ namespace Cbox\Billing\Mollie;
 
 use Cbox\Billing\Mollie\Contracts\MollieIntentCreator;
 use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
+use Cbox\Billing\Mollie\Support\PaymentReader;
+use Closure;
 use Mollie\Api\Exceptions\ApiException;
 use Mollie\Api\Http\ResponseStatusCode;
 use Mollie\Api\MollieApiClient;
@@ -15,17 +17,35 @@ use Throwable;
  * The real Mollie-SDK-backed intent creator. Thin: it makes the API call and
  * normalises the result; decision logic lives in the gateway. Mollie is
  * redirect-based, so a created payment starts `open` (pending) until the customer
- * completes it. Verify against the live Mollie API before production.
+ * completes it.
+ *
+ * Every payment it creates carries the `webhookUrl` Mollie calls when the payment changes
+ * (paid, failed, refunded, charged back): without one, Mollie never reports back. The redirect
+ * URL, the webhook URL and the setup amount may be closures, read per call, so a host can send
+ * the customer back to the page they came from and point the webhook at the environment that
+ * made the payment.
+ *
+ * An SDK failure surfaces as {@see MollieChargeFailed} carrying the SDK exception as its
+ * previous, so a host can tell a timeout from a refusal.
  */
 readonly class MollieApiIntentCreator implements MollieIntentCreator
 {
     private const SETUP_DESCRIPTION = 'Save payment method for future billing';
 
+    /** The brand a SEPA Direct Debit mandate reports, the same word the engine's other adapters use. */
+    public const SEPA_BRAND = 'sepa_debit';
+
+    /**
+     * @param  string|Closure(): string  $redirectUrl  where Mollie sends the customer after the checkout
+     * @param  string|Closure(): string  $setupAmount  the first payment that sets up a mandate (`0.00` saves a card at no charge)
+     * @param  string|Closure(): string  $webhookUrl  where Mollie reports the payment's changes; empty sends none
+     */
     public function __construct(
         private MollieApiClient $client,
-        private string $redirectUrl,
-        private string $setupAmount = '0.00',
+        private string|Closure $redirectUrl,
+        private string|Closure $setupAmount = '0.00',
         private string $setupCurrency = 'EUR',
+        private string|Closure $webhookUrl = '',
     ) {}
 
     public function create(string $amount, string $currency, string $reference, string $idempotencyKey): array
@@ -33,14 +53,13 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         try {
             $this->client->setIdempotencyKey($idempotencyKey);
 
-            $payment = $this->client->payments->create([
+            $payment = $this->client->payments->create($this->withUrls([
                 'amount' => ['currency' => $currency, 'value' => $amount],
                 'description' => $reference,
-                'redirectUrl' => $this->redirectUrl,
                 'metadata' => ['reference' => $reference],
-            ]);
+            ]));
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return [
@@ -58,7 +77,7 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
                 'amount' => ['currency' => $currency, 'value' => $amount],
             ]);
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return [
@@ -69,15 +88,15 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
 
     public function createIntent(string $amount, string $currency, string $account, string $reference, string $idempotencyKey, ?string $mandateId): array
     {
+        $recurring = $mandateId !== null && $mandateId !== '';
         $params = [
             'amount' => ['currency' => $currency, 'value' => $amount],
             'description' => $reference,
-            'redirectUrl' => $this->redirectUrl,
             'metadata' => ['reference' => $reference],
             'customerId' => $account,
         ];
 
-        if ($mandateId !== null && $mandateId !== '') {
+        if ($recurring) {
             // Charge the already-saved mandate off-session (no redirect / checkout URL).
             $params['sequenceType'] = 'recurring';
             $params['mandateId'] = $mandateId;
@@ -85,15 +104,16 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
 
         try {
             $this->client->setIdempotencyKey($idempotencyKey);
-            $payment = $this->client->payments->create($params);
+            $payment = $this->client->payments->create($this->withUrls($params, redirect: ! $recurring));
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return [
             'id' => (string) $payment->id,
             'status' => (string) $payment->status,
             'checkoutUrl' => $payment->getCheckoutUrl(),
+            'failureReason' => PaymentReader::read($payment)->failureReason,
         ];
     }
 
@@ -101,16 +121,15 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
     {
         try {
             $this->client->setIdempotencyKey($idempotencyKey);
-            $payment = $this->client->payments->create([
-                'amount' => ['currency' => $this->setupCurrency, 'value' => $this->setupAmount],
+            $payment = $this->client->payments->create($this->withUrls([
+                'amount' => ['currency' => $this->setupCurrency, 'value' => self::resolve($this->setupAmount)],
                 'description' => self::SETUP_DESCRIPTION,
-                'redirectUrl' => $this->redirectUrl,
                 'customerId' => $account,
                 // `first` establishes a reusable mandate once the customer completes it.
                 'sequenceType' => 'first',
-            ]);
+            ]));
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return [
@@ -125,7 +144,7 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         try {
             $mandates = $this->client->mandates->pageForId($account);
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         $defaultId = self::firstValidMandateId($mandates);
@@ -133,6 +152,12 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         $mapped = [];
 
         foreach ($mandates as $mandate) {
+            // An invalid mandate (the customer's bank refused it, or its first payment never
+            // completed) can never be charged, so it is not a saved method.
+            if (self::prop($mandate, 'status') === 'invalid') {
+                continue;
+            }
+
             $id = self::prop($mandate, 'id');
             $mapped[] = self::mapMandate($mandate, $id !== '' && $id === $defaultId);
         }
@@ -154,7 +179,7 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
         try {
             $mandate = $this->client->mandates->getForId($account, $mandateId);
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return self::mapMandate($mandate, false);
@@ -177,7 +202,7 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
             ], static fn (mixed $value): bool => $value !== null));
         } catch (Throwable $e) {
             // A customer that was never created must not be returned — surface the failure.
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
 
         return (string) $customer->id;
@@ -194,9 +219,9 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
                 return;
             }
 
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         } catch (Throwable $e) {
-            throw new MollieChargeFailed($e->getMessage(), previous: $e);
+            throw new MollieChargeFailed($e->getMessage(), (int) $e->getCode(), $e);
         }
     }
 
@@ -218,20 +243,38 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
     }
 
     /**
-     * Normalise a Mollie mandate onto the seam's display shape, reading only the
-     * non-sensitive card fields Mollie exposes (label, last 4, expiry) — never a PAN.
+     * Normalise a Mollie mandate onto the seam's display shape, reading only the non-sensitive
+     * fields Mollie exposes, never a full card number or IBAN:
+     *
+     *  - a card mandate (`creditcard`): the card label as the brand, the last four digits Mollie
+     *    gives, and the expiry;
+     *  - a SEPA Direct Debit mandate (`directdebit`): the brand `sepa_debit` and the last four
+     *    characters of the IBAN, with no expiry.
      *
      * @return array{id: string, brand: string, last4: string, expMonth: ?int, expYear: ?int, isDefault: bool}
      */
     private static function mapMandate(mixed $mandate, bool $isDefault): array
     {
         $details = is_object($mandate) && isset($mandate->details) ? $mandate->details : null;
+        $method = self::prop($mandate, 'method');
+
+        if ($method === 'directdebit') {
+            return [
+                'id' => self::prop($mandate, 'id'),
+                'brand' => self::SEPA_BRAND,
+                'last4' => self::last4(str_replace(' ', '', self::detail($details, 'consumerAccount'))),
+                'expMonth' => null,
+                'expYear' => null,
+                'isDefault' => $isDefault,
+            ];
+        }
 
         [$expMonth, $expYear] = self::expiry(self::detail($details, 'cardExpiryDate'));
+        $label = self::detail($details, 'cardLabel');
 
         return [
             'id' => self::prop($mandate, 'id'),
-            'brand' => self::detail($details, 'cardLabel'),
+            'brand' => $label !== '' ? $label : ($method !== '' ? $method : 'card'),
             'last4' => self::last4(self::detail($details, 'cardNumber')),
             'expMonth' => $expMonth,
             'expYear' => $expYear,
@@ -240,21 +283,46 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
     }
 
     /**
+     * The payment's create parameters with the URLs Mollie needs: the redirect for a payment the
+     * customer completes at the checkout, and the webhook for every payment, when one is set.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    private function withUrls(array $params, bool $redirect = true): array
+    {
+        $redirectUrl = self::resolve($this->redirectUrl);
+        $webhookUrl = self::resolve($this->webhookUrl);
+
+        if ($redirect && $redirectUrl !== '') {
+            $params['redirectUrl'] = $redirectUrl;
+        }
+
+        if ($webhookUrl !== '') {
+            $params['webhookUrl'] = $webhookUrl;
+        }
+
+        return $params;
+    }
+
+    /** @param  string|Closure(): string  $value */
+    private static function resolve(string|Closure $value): string
+    {
+        return $value instanceof Closure ? $value() : $value;
+    }
+
+    /**
      * Read a string property off a Mollie SDK resource (dynamic `public` properties),
      * defensively — an absent or non-string value normalises to an empty string.
      */
     private static function prop(mixed $resource, string $key): string
     {
-        if (is_object($resource) && isset($resource->{$key}) && is_string($resource->{$key})) {
-            return $resource->{$key};
-        }
-
-        return '';
+        return PaymentReader::string($resource, $key);
     }
 
     /**
-     * Read a string field off a mandate's `details` object (creditcard label / number /
-     * expiry), defensively.
+     * Read a string field off a mandate's `details` object (card label / number / expiry, or
+     * the bank account), defensively.
      */
     private static function detail(mixed $details, string $key): string
     {
@@ -262,12 +330,12 @@ readonly class MollieApiIntentCreator implements MollieIntentCreator
     }
 
     /**
-     * The last four digits of a mandate's masked card number (Mollie already exposes only
-     * the trailing digits; guard defensively regardless).
+     * The last four characters of a mandate's masked card number or IBAN (Mollie already
+     * exposes only the trailing digits of a card; guard defensively regardless).
      */
-    private static function last4(string $cardNumber): string
+    private static function last4(string $number): string
     {
-        return $cardNumber === '' ? '' : substr($cardNumber, -4);
+        return $number === '' ? '' : substr($number, -4);
     }
 
     /**

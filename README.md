@@ -14,6 +14,7 @@ composer require cboxdk/laravel-billing-mollie
 // .env
 MOLLIE_KEY=live_...
 MOLLIE_REDIRECT_URL=https://your-app.test/billing/return
+MOLLIE_WEBHOOK_URL=https://your-app.test/webhooks/mollie
 ```
 
 With a key set, the provider binds `Cbox\Billing\Payment\Contracts\PaymentGateway`
@@ -36,17 +37,23 @@ to the Mollie gateway. Mollie is redirect-based, so a payment starts `open`
   $paymentMethodId)` treats `$paymentMethodId` as a mandate id and `$account` as the
   owning customer reference, and **revokes** that mandate. The revoke is idempotent —
   an already-revoked or unknown mandate (Mollie 410 / 404) is a no-op.
+- **Saved methods are mandates.** A card mandate lists under its card label; a SEPA
+  Direct Debit mandate lists as `sepa_debit` with the last four of the IBAN. An
+  `invalid` mandate is left out, because it cannot be charged.
 - **Idempotent webhooks on the shared seam.** `MollieApiWebhookVerifier` implements
-  billing's canonical `Cbox\Billing\Payment\Contracts\WebhookVerifier`: it proves the
-  Mollie signature via the SDK (deny-by-default), fetches the payment's authoritative
-  state through the `PaymentFetcher` seam (a Mollie webhook carries only the payment
-  id), and normalises the delivery onto the engine's shared `WebhookEvent`.
+  billing's canonical `Cbox\Billing\Payment\Contracts\WebhookVerifier`. A classic
+  Mollie webhook (`id=tr_…`, unsigned) is proved by fetching the payment with the
+  account's key: a payment the account does not own is not found and refused. A signed
+  next-gen delivery is also checked against `MOLLIE_WEBHOOK_SECRET` via the SDK. The
+  event is built only from the fetched payment (`MollieWebhookEvent`, carrying the
+  refunded total and any chargebacks), never from the body.
   `MollieWebhookHandler` then hands that event to the engine's own `WebhookIngest`,
   which applies the paid effect to the invoice exactly once per reference — collapsing
   gateway re-deliveries and crash-retries. The adapter only overrides the shared
   dedup/settle stores with durable database implementations; it owns no webhook
   contracts of its own. Charges carry a scoped external idempotency key so a
-  crash-and-retry never duplicates a payment. Set `MOLLIE_WEBHOOK_SECRET` to enable it.
+  crash-and-retry never duplicates a payment. Set `MOLLIE_WEBHOOK_URL` so Mollie calls
+  back at all; `MOLLIE_WEBHOOK_SECRET` is only for signed next-gen subscriptions.
   See [docs/core-concepts/webhooks.md](docs/core-concepts/webhooks.md).
 
 > The SDK wrapper implements Mollie's documented API shape — verify against the live
