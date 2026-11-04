@@ -4,75 +4,40 @@ declare(strict_types=1);
 
 namespace Cbox\Billing\Mollie;
 
-use Brick\Money\Money as BrickMoney;
 use Cbox\Billing\Mollie\Contracts\PaymentFetcher;
 use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
-use Cbox\Billing\Money\Money;
+use Cbox\Billing\Mollie\Exceptions\MolliePaymentNotFound;
+use Cbox\Billing\Mollie\Support\PaymentReader;
+use Cbox\Billing\Mollie\ValueObjects\MolliePayment;
+use Mollie\Api\Exceptions\ApiException;
+use Mollie\Api\Http\ResponseStatusCode;
 use Mollie\Api\MollieApiClient;
 use Throwable;
 
 /**
- * The real payment fetcher: wraps {@see MollieApiClient} to read a payment's current
- * status, our reference (from its metadata), and its amount by id. Thin by design — the
- * verifier owns the normalisation and the ingest owns the idempotency. Verify against
- * the live Mollie API before relying on it in production.
+ * The real payment fetcher: `GET /v2/payments/{id}?embed=chargebacks` with the account's own API
+ * key, read into a {@see MolliePayment}. The chargebacks are embedded so a webhook Mollie sends
+ * for a new or reversed chargeback carries it in the same request. Thin by design: the verifier
+ * owns the normalisation and the ingest owns the idempotency.
  */
 readonly class MollieApiPaymentFetcher implements PaymentFetcher
 {
-    /**
-     * Currency for the placeholder zero amount when a payment carries no parseable
-     * amount (only non-settled statuses, whose amount the ingest never reads).
-     */
-    private const PLACEHOLDER_CURRENCY = 'EUR';
-
     public function __construct(private MollieApiClient $client) {}
 
-    public function fetch(string $paymentId): array
+    public function fetch(string $paymentId): MolliePayment
     {
         try {
-            $payment = $this->client->payments->get($paymentId);
+            $payment = $this->client->payments->get($paymentId, ['embed' => 'chargebacks']);
+        } catch (ApiException $e) {
+            if ($e->getCode() === ResponseStatusCode::HTTP_NOT_FOUND) {
+                throw new MolliePaymentNotFound($e->getMessage(), $e->getCode(), $e);
+            }
+
+            throw new MollieChargeFailed($e->getMessage(), $e->getCode(), $e);
         } catch (Throwable $e) {
             throw new MollieChargeFailed($e->getMessage(), previous: $e);
         }
 
-        return [
-            'id' => self::string($payment->id),
-            'status' => self::string($payment->status),
-            'reference' => $this->reference($payment->metadata),
-            'amount' => $this->amount($payment->amount),
-        ];
-    }
-
-    private function reference(mixed $metadata): string
-    {
-        if (is_object($metadata) && isset($metadata->reference) && is_string($metadata->reference)) {
-            return $metadata->reference;
-        }
-
-        if (is_array($metadata) && isset($metadata['reference']) && is_string($metadata['reference'])) {
-            return $metadata['reference'];
-        }
-
-        return '';
-    }
-
-    private function amount(mixed $amount): Money
-    {
-        if (
-            is_object($amount)
-            && isset($amount->value, $amount->currency)
-            && is_string($amount->value)
-            && is_string($amount->currency)
-            && $amount->currency !== ''
-        ) {
-            return Money::fromBrick(BrickMoney::of($amount->value, $amount->currency));
-        }
-
-        return Money::zero(self::PLACEHOLDER_CURRENCY);
-    }
-
-    private static function string(mixed $value): string
-    {
-        return is_string($value) ? $value : '';
+        return PaymentReader::read($payment);
     }
 }

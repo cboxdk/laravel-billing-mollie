@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Cbox\Billing\Mollie;
 
 use Cbox\Billing\Mollie\Contracts\PaymentFetcher;
+use Cbox\Billing\Mollie\Exceptions\MollieChargeFailed;
+use Cbox\Billing\Mollie\Exceptions\MolliePaymentNotFound;
+use Cbox\Billing\Mollie\ValueObjects\MollieWebhookEvent;
 use Cbox\Billing\Payment\Contracts\WebhookVerifier;
 use Cbox\Billing\Payment\Enums\WebhookEventType;
 use Cbox\Billing\Payment\Exceptions\WebhookVerificationFailed;
@@ -14,38 +17,64 @@ use Mollie\Api\Exceptions\InvalidSignatureException;
 use Mollie\Api\Webhooks\SignatureValidator;
 
 /**
- * The Mollie-backed {@see WebhookVerifier}: wraps the Mollie SDK's
- * {@see SignatureValidator} (HMAC-SHA256 over the raw body against the webhook signing
- * secret) and normalises the delivery onto the engine's gateway-agnostic
- * {@see WebhookEvent}. No bespoke crypto — verification is entirely the SDK's.
+ * The Mollie-backed {@see WebhookVerifier}. Mollie sends two kinds of payment webhook, and this
+ * verifier takes both:
  *
- * A Mollie classic webhook body carries only the payment id (`id=tr_…`), never the
- * status or amount, so after proving the signature the verifier fetches the payment's
- * authoritative state through the {@see PaymentFetcher} seam to build the event. Mollie
- * has no native event id either, so the first-sight dedup key is the payment id plus its
- * current status (a genuine `open`→`paid` transition is a distinct event).
+ *  - CLASSIC (what a payment's `webhookUrl` receives): a form POST whose only field is the
+ *    payment id, `id=tr_…`. Mollie does not sign it. Its security model is that the body carries
+ *    no state: the receiver fetches the payment from the API with its own key and acts on what
+ *    the API says. A forged call can therefore only make us look a payment up; it cannot claim
+ *    one is paid. A payment the account does not own is not found, and refused.
+ *  - NEXT-GEN (a webhook subscription, `payment.*` events): JSON naming the payment in
+ *    `entityId`, signed with an `X-Mollie-Signature: sha256=…` HMAC of the raw body. With a
+ *    signing secret configured, a signed delivery must carry a valid signature, checked by the
+ *    SDK's {@see SignatureValidator} before any API call; the payment is still fetched, because
+ *    the fetch is the state we act on.
  *
- * Deny-by-default: a missing signature, an invalid signature, or a body without a
- * payment id throws {@see WebhookVerificationFailed} and never becomes an event. Verify
- * against the live Mollie API before relying on it in production.
+ * Either way the event is built only from the fetched payment ({@see MollieWebhookEvent}), never
+ * from the body. Deny-by-default: a body without a payment id, a signature that does not match,
+ * or a payment the account does not have throws {@see WebhookVerificationFailed}. A failure to
+ * reach Mollie at all propagates as {@see MollieChargeFailed}, so the host answers with a 5xx and
+ * Mollie delivers again.
  */
 readonly class MollieApiWebhookVerifier implements WebhookVerifier
 {
+    private const string PAYMENT_ID = '/^tr_[A-Za-z0-9]+$/';
+
     public function __construct(
-        private SignatureValidator $validator,
+        private ?SignatureValidator $validator,
         private PaymentFetcher $fetcher,
     ) {}
 
+    /**
+     * @throws WebhookVerificationFailed when the delivery cannot be proved
+     * @throws MollieChargeFailed when Mollie could not be asked for the payment
+     */
     public function verify(WebhookPayload $payload): WebhookEvent
     {
         $signature = $payload->header('X-Mollie-Signature');
 
-        if ($signature === null || $signature === '') {
-            throw WebhookVerificationFailed::unsigned();
+        if ($signature !== null && $signature !== '') {
+            $this->checkSignature($payload->body, $signature);
         }
 
         try {
-            $valid = $this->validator->validatePayload($payload->body, $signature);
+            $payment = $this->fetcher->fetch($this->paymentId($payload->body));
+        } catch (MolliePaymentNotFound) {
+            throw new WebhookVerificationFailed('Mollie has no such payment for this account.');
+        }
+
+        return new MollieWebhookEvent(self::mapType($payment->status), $payment);
+    }
+
+    private function checkSignature(string $body, string $signature): void
+    {
+        if ($this->validator === null) {
+            throw new WebhookVerificationFailed('A signed Mollie webhook arrived, but no signing secret is configured to check it.');
+        }
+
+        try {
+            $valid = $this->validator->validatePayload($body, $signature);
         } catch (InvalidSignatureException $e) {
             throw new WebhookVerificationFailed($e->getMessage(), previous: $e);
         }
@@ -53,26 +82,14 @@ readonly class MollieApiWebhookVerifier implements WebhookVerifier
         if (! $valid) {
             throw WebhookVerificationFailed::unsigned();
         }
-
-        $payment = $this->fetcher->fetch($this->paymentId($payload->body));
-
-        return new WebhookEvent(
-            id: $payment['id'].':'.$payment['status'],
-            type: self::mapType($payment['status']),
-            reference: $payment['reference'],
-            amount: $payment['amount'],
-        );
     }
 
     /**
-     * Map a Mollie payment status onto the engine's narrow event type. Only `paid` carries
-     * the paid effect; a terminal `expired`/`canceled`/`failed` maps to a failure notice.
-     * The SCA states are now first-class and no longer collapsed to a generic pending
-     * notice: `open` and `authorized` mean the customer must still act / authorize on the
-     * hosted checkout ({@see WebhookEventType::RequiresAction}), and `pending` is an
-     * accepted-but-not-yet-settled charge ({@see WebhookEventType::Processing}). Neither
-     * moves money — the invoice is marked paid strictly on `paid`. Anything else authentic
-     * maps to a pending notice.
+     * Map a Mollie payment status onto the engine's narrow event type. Only `paid` carries the
+     * paid effect; a terminal `expired`/`canceled`/`failed` maps to a failure notice. `open` and
+     * `authorized` mean the customer must still act on the hosted checkout
+     * ({@see WebhookEventType::RequiresAction}), and `pending` is an accepted charge that has not
+     * settled yet ({@see WebhookEventType::Processing}).
      */
     private static function mapType(string $status): WebhookEventType
     {
@@ -85,13 +102,21 @@ readonly class MollieApiWebhookVerifier implements WebhookVerifier
         };
     }
 
+    /** The payment id from a classic form body (`id=tr_…`) or a next-gen JSON body (`entityId`). */
     private function paymentId(string $body): string
     {
-        parse_str($body, $params);
-        $id = $params['id'] ?? null;
+        $id = null;
+        $json = json_decode($body, true);
 
-        if (! is_string($id) || $id === '') {
-            throw new WebhookVerificationFailed('Mollie webhook payload is missing a payment id.');
+        if (is_array($json)) {
+            $id = $json['entityId'] ?? null;
+        } else {
+            parse_str($body, $params);
+            $id = $params['id'] ?? null;
+        }
+
+        if (! is_string($id) || preg_match(self::PAYMENT_ID, $id) !== 1) {
+            throw new WebhookVerificationFailed('Mollie webhook payload does not name a payment.');
         }
 
         return $id;

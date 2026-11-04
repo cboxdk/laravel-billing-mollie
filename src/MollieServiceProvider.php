@@ -22,8 +22,9 @@ use Mollie\Api\Webhooks\SignatureValidator;
 
 /**
  * Binds the Mollie gateway as billing's PaymentGateway when an API key is configured,
- * and the Mollie-backed webhook verifier when both an API key (needed to fetch payment
- * status) and a webhook signing secret are configured. Without a key the provider stays
+ * and the Mollie-backed webhook verifier whenever an API key is configured (the key is what
+ * proves a classic webhook, by fetching the payment; the optional signing secret checks a
+ * signed next-gen delivery as well). Without a key the provider stays
  * out of the way and billing keeps its default.
  *
  * The refactor onto the shared webhook seam: this adapter no longer owns a verifier
@@ -78,6 +79,9 @@ class MollieServiceProvider extends ServiceProvider
         $profileId = $config->get('billing-mollie.profile_id');
         $profileId = is_string($profileId) ? $profileId : '';
 
+        $webhookUrl = $config->get('billing-mollie.webhook_url');
+        $webhookUrl = is_string($webhookUrl) ? $webhookUrl : '';
+
         $this->app->singleton(MollieApiClient::class, static function () use ($key): MollieApiClient {
             $client = new MollieApiClient;
             $client->setApiKey($key);
@@ -90,6 +94,7 @@ class MollieServiceProvider extends ServiceProvider
             $redirectUrl,
             $setupAmount,
             $setupCurrency,
+            $webhookUrl,
         ));
 
         $this->app->singleton(PaymentFetcher::class, static fn (Application $app): MollieApiPaymentFetcher => new MollieApiPaymentFetcher(
@@ -108,18 +113,18 @@ class MollieServiceProvider extends ServiceProvider
         $key = $config->get('billing-mollie.key');
         $webhookSecret = $config->get('billing-mollie.webhook_secret');
 
-        if (! is_string($webhookSecret) || $webhookSecret === '') {
-            return;
-        }
-
-        // The verifier fetches payment status through the PaymentFetcher seam, which
-        // needs an API key; without one the webhook cannot be normalised.
+        // The verifier proves a delivery by fetching the payment with the API key (Mollie's
+        // classic payment webhooks are not signed); without a key nothing can be proved.
         if (! is_string($key) || $key === '') {
             return;
         }
 
+        // The signing secret is optional: it checks the signature of a next-gen (signed) webhook
+        // before the fetch. Without it, a signed delivery is refused and classic ones verify.
+        $validator = is_string($webhookSecret) && $webhookSecret !== '' ? new SignatureValidator($webhookSecret) : null;
+
         $this->app->singleton(WebhookVerifier::class, static fn (Application $app): MollieApiWebhookVerifier => new MollieApiWebhookVerifier(
-            new SignatureValidator($webhookSecret),
+            $validator,
             $app->make(PaymentFetcher::class),
         ));
 

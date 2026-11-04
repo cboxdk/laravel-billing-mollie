@@ -82,7 +82,7 @@ readonly class MolliePaymentGateway implements PaymentGateway
             return PaymentResult::failed($e->getMessage());
         }
 
-        $mapped = $this->mapper->map($result['status'], $result['id']);
+        $mapped = $this->mapper->map($result['status'], $result['id'], $result['failureReason'] ?? null);
 
         if ($mapped->isSettled()) {
             $this->settledPayments->settle($intent->reference);

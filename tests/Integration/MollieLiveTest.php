@@ -3,7 +3,15 @@
 declare(strict_types=1);
 
 use Cbox\Billing\Mollie\MollieApiIntentCreator;
+use Cbox\Billing\Mollie\MollieApiPaymentFetcher;
+use Cbox\Billing\Mollie\MollieApiWebhookVerifier;
 use Cbox\Billing\Mollie\MolliePaymentGateway;
+use Cbox\Billing\Mollie\ValueObjects\MollieWebhookEvent;
+use Cbox\Billing\Money\Money;
+use Cbox\Billing\Payment\Enums\PaymentStatus;
+use Cbox\Billing\Payment\Exceptions\WebhookVerificationFailed;
+use Cbox\Billing\Payment\ValueObjects\PaymentIntent;
+use Cbox\Billing\Payment\ValueObjects\WebhookPayload;
 use Cbox\Billing\Payment\Webhook\Storage\InMemorySettledPaymentStore;
 use Mollie\Api\Exceptions\ApiException;
 use Mollie\Api\Http\ResponseStatusCode;
@@ -132,6 +140,50 @@ it('drives the full stored-customer + mandate lifecycle against Mollie test mode
         expect(mandateIsGoneOrInvalid($client, $customerId, $mandate->id))->toBeTrue();
     } finally {
         // Clean up the throwaway customer (this also tears down its mandates).
+        deleteCustomerQuietly($client, $customerId);
+    }
+});
+
+it('lists a SEPA mandate, charges it off-session and proves the payment as a classic webhook would', function () {
+    $client = liveClient();
+    $gateway = liveGateway($client);
+    $customerId = $gateway->createCustomer('DK-'.bin2hex(random_bytes(4)), 'ada@example.test', 'Ada Lovelace');
+
+    try {
+        $mandate = createTestMandate($client, $customerId);
+        $methods = $gateway->paymentMethods($customerId);
+
+        expect($methods)->toHaveCount(1)
+            ->and($methods[0]->id)->toBe($mandate->id)
+            ->and($methods[0]->brand)->toBe('sepa_debit')
+            ->and($methods[0]->last4)->toBe('0000')
+            ->and($methods[0]->isDefault)->toBeTrue();
+
+        $reference = 'LIVE-'.bin2hex(random_bytes(4));
+        $result = $gateway->charge(new PaymentIntent(
+            id: 'pi_live',
+            amount: Money::ofMinor(1000, 'EUR'),
+            reference: $reference,
+            customerRef: $customerId,
+            paymentMethodRef: $mandate->id,
+        ));
+
+        // A SEPA Direct Debit is accepted and clears days later: pending, with the payment id.
+        expect($result->status)->toBe(PaymentStatus::Pending)
+            ->and($result->gatewayReference)->toStartWith('tr_');
+
+        $event = (new MollieApiWebhookVerifier(null, new MollieApiPaymentFetcher($client)))
+            ->verify(new WebhookPayload('id='.$result->gatewayReference));
+
+        expect($event)->toBeInstanceOf(MollieWebhookEvent::class)
+            ->and($event->reference)->toBe($reference)
+            ->and($event->amount)->toEqual(Money::ofMinor(1000, 'EUR'))
+            ->and($event instanceof MollieWebhookEvent ? $event->payment->mandateId : null)->toBe($mandate->id);
+
+        // A payment id the account does not have is refused, not settled.
+        expect(fn () => (new MollieApiWebhookVerifier(null, new MollieApiPaymentFetcher($client)))
+            ->verify(new WebhookPayload('id=tr_0000000000')))->toThrow(WebhookVerificationFailed::class);
+    } finally {
         deleteCustomerQuietly($client, $customerId);
     }
 });

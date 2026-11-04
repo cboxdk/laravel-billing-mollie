@@ -1,0 +1,86 @@
+{
+  "resource": "payment",
+  "id": "tr_8KwCUNMVJe",
+  "mode": "live",
+  "createdAt": "2022-01-18T14:04:24+00:00",
+  "amount": {
+    "value": "0.01",
+    "currency": "EUR"
+  },
+  "description": "Mollie  #135",
+  "method": "creditcard",
+  "metadata": {
+    "order_id": "135",
+    "customer_id": "5",
+    "billing_address": {
+      "first_name": "Amanda",
+      "email": "test@mollie.com",
+      "last_name": "Walsh",
+      "city": "Paris",
+      "state": "centre",
+      "country": "FR",
+      "country_code": "FR",
+      "zip": "75007",
+      "phone": 628351095,
+      "address1": "Champ de Mars, 5 Avenue Anatole France",
+      "address2": null,
+      "name": "Amanda Walsh",
+      "state_code": null,
+      "phone_number": 628351095
+    },
+    "default_instrument": false
+  },
+  "status": "paid",
+  "paidAt": "2022-01-18T14:04:25+00:00",
+  "amountRefunded": {
+    "value": "0.01",
+    "currency": "EUR"
+  },
+  "amountRemaining": {
+    "value": "0.00",
+    "currency": "EUR"
+  },
+  "locale": "nl_NL",
+  "profileId": "pfl_zcfJRjkf6P",
+  "customerId": "cst_77Ffsgn3ny",
+  "mandateId": "mdt_DPRgAhbMDG",
+  "sequenceType": "recurring",
+  "redirectUrl": null,
+  "webhookUrl": "https://example.com/api/public/v1/payments/stores/1001879680/providers/mollie/notifications?currency_code=EUR",
+  "settlementAmount": {
+    "value": "0.01",
+    "currency": "EUR"
+  },
+  "details": {
+    "cardFingerprint": "BN895ync4krH6kr9TBhstfhh",
+    "cardNumber": "9267",
+    "cardHolder": "A.J. Walsh",
+    "cardAudience": "consumer",
+    "cardLabel": "Mastercard",
+    "cardCountryCode": "NL",
+    "cardSecurity": "normal",
+    "feeRegion": "intra-eu"
+  },
+  "_links": {
+    "self": {
+      "href": "...",
+      "type": "application/hal+json"
+    },
+    "dashboard": {
+      "href": "https://www.mollie.com/dashboard/org_7049691/payments/tr_8KwCUNMVJe",
+      "type": "text/html"
+    },
+    "refunds": {
+      "href": "https://api.mollie.com/v2/payments/tr_8KwCUNMVJe/refunds",
+      "type": "application/hal+json"
+    },
+    "customer": {
+      "href": "https://api.mollie.com/v2/customers/cst_77Ffsgn3ny",
+      "type": "application/hal+json"
+    },
+    "mandate": {
+      "href": "https://api.mollie.com/v2/customers/cst_77Ffsgn3ny/mandates/mdt_DPRgAhbMDG",
+      "type": "application/hal+json"
+    }
+  }
+}

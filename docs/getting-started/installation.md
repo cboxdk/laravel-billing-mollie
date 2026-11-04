@@ -17,6 +17,7 @@ redirect-based, so the customer returns there after paying):
 // .env
 MOLLIE_KEY=live_...
 MOLLIE_REDIRECT_URL=https://your-app.test/billing/return
+MOLLIE_WEBHOOK_URL=https://your-app.test/webhooks/mollie
 ```
 
 Publish the config to change it:
